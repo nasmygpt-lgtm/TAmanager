@@ -585,6 +585,32 @@ async function ocrImage(dataURL){
   return data.text;
 }
 
+/* Rebuild readable text (with line breaks) from PDF.js text items.
+   PDF.js gives each text fragment an affine transform; transform[5] is the
+   Y position on the page. Fragments sharing (roughly) the same Y are on the
+   same visual line. We group by Y, sort lines top→bottom and fragments
+   left→right, so table rows come out as separate lines the parser can read. */
+function itemsToText(items){
+  if(!items || !items.length) return "";
+  const rows = [];
+  const yTol = 3; // pixels — items within this Y distance are the same line
+  for(const it of items){
+    const str = (it.str || "");
+    if(!str.trim() && !it.hasEOL) continue;
+    const y = it.transform ? it.transform[5] : 0;
+    const x = it.transform ? it.transform[4] : 0;
+    let row = rows.find(r => Math.abs(r.y - y) <= yTol);
+    if(!row){ row = { y, parts: [] }; rows.push(row); }
+    row.parts.push({ x, str });
+  }
+  rows.sort((a,b)=> b.y - a.y); // PDF Y grows upward, so higher Y = higher on page
+  return rows.map(r=>{
+    r.parts.sort((a,b)=> a.x - b.x);
+    // join fragments on a line with 2 spaces so column boundaries survive
+    return r.parts.map(p=>p.str).join("  ").replace(/\s{3,}/g,"  ").trim();
+  }).filter(Boolean).join("\n");
+}
+
 async function ocrPDF(dataURL){
   setProgress(true, 10, "Opening PDF…");
   const base64 = dataURL.split(",")[1];
@@ -598,10 +624,12 @@ async function ocrPDF(dataURL){
   for(let p=1; p<=pdf.numPages; p++){
     const page = await pdf.getPage(p);
 
-    // 1) try to grab embedded text (fast + accurate for digital PDFs)
+    // 1) try to grab embedded text (fast + accurate for digital PDFs).
+    //    Reconstruct line breaks from item Y-positions so table rows stay
+    //    on separate lines (PDF.js otherwise returns items with no newlines).
     const tc = await page.getTextContent();
-    const embedded = tc.items.map(i=>i.str).join(" ").trim();
-    if(embedded.length > 30){
+    const embedded = itemsToText(tc.items);
+    if(embedded.replace(/\s/g,"").length > 20){
       fullText += embedded + "\n";
       setProgress(true, 10 + Math.round((p/pdf.numPages)*80), `Read page ${p}/${pdf.numPages}`);
       continue;
