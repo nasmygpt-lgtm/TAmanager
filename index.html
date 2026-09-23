@@ -835,44 +835,98 @@ function parseRates(text){
    The user reviews the grid before saving. */
 function parseGenericTable(text){
   const out = { title:"", headers:[], rows:[] };
-  const lines = text.split(/\r?\n/).map(l=>l.replace(/\s+$/,"")).filter(l=>l.trim());
+  let lines = text.split(/\r?\n/).map(l=>l.replace(/\s+$/,"")).filter(l=>l.trim());
   if(!lines.length) return out;
+
+  const monthOnly = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?$/i;
+  const yearOnly  = /^(20\d{2})$/;
+  const monthAny  = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\b/i;
+
+  // ---- STITCH split month/year lines back together (PDFs break these up) ----
+  const stitched = [];
+  for(let i=0;i<lines.length;i++){
+    const line = lines[i];
+    if(yearOnly.test(line) && stitched.length && !/20\d{2}/.test(stitched[stitched.length-1]) && monthAny.test(stitched[stitched.length-1])){
+      stitched[stitched.length-1] += " " + line; continue;
+    }
+    if(monthOnly.test(line)){
+      let j=i+1, year="";
+      if(j<lines.length && yearOnly.test(lines[j])){ year=" "+lines[j]; j++; }
+      if(j<lines.length && /\d/.test(lines[j])){ stitched.push(line+year+"  "+lines[j]); i=j; continue; }
+      stitched.push(line+year); if(year) i=j-1; continue;
+    }
+    stitched.push(line);
+  }
+  lines = stitched;
 
   const splitCells = l => l.trim().split(/\s{2,}|\t|\s*\|\s*/).map(c=>c.trim()).filter(Boolean);
 
-  // 1) find the header row: the first line with 2+ cells that contains known
-  //    column words, OR just the first multi-cell line near the top.
-  const headerHint = /(rate\s*type|month|bed\s*&?\s*breakfast|\bbb\b|room\s*only|\bro\b|non[- ]?refundable|\bnrf\b|release|allot|supplement|meal|plan|period|price|rate\b)/i;
-  let headerIdx = -1;
-  for(let i=0; i<lines.length; i++){
+  // Lines that belong to OTHER sections (footers/policies) — never data rows.
+  const footerRe = /\b(cancellation|no\s*show|penalty|extra\s*bed|child|cnb|meal\s*plan|half\s*board|full\s*board|supplement|event|peak|diwali|new\s*year|expo|gulf\s*food|big\s*5|rates?\s+are\s+quoted|valid\b|terms|conditions|policy)\b/i;
+
+  // ---- 1) Find DATA rows first: a line starting with a Month, having 2+ cells
+  //         and at least one number, and NOT a footer/policy line. ----
+  const dataIdx = [];
+  for(let i=0;i<lines.length;i++){
+    const l = lines[i];
+    if(footerRe.test(l)) continue;
+    if(!monthAny.test(l)) continue;
+    if(!/\d/.test(l)) continue;
+    if(splitCells(l).length < 2) continue;
+    dataIdx.push(i);
+  }
+  if(dataIdx.length === 0) return out;   // no rate rows found
+
+  // width of the data rows (use the widest, to capture all columns)
+  const colCount = Math.max(...dataIdx.map(i=> splitCells(lines[i]).length));
+
+  // ---- 2) Header = the nearest line ABOVE the first data row that has a
+  //         similar number of cells and looks like column titles. ----
+  const firstData = dataIdx[0];
+  // Collect the header lines between the title and the first data row, then
+  // merge them column-by-column (handles wrapped headers like
+  //   "Month  Bed & Breakfast  Room Only  Non-Refundable  Release"
+  //   "(BB)  (RO)  (NRF)  Period"  ).
+  const headerLines = [];
+  for(let i=firstData-1; i>=0 && i>=firstData-4; i--){
+    if(footerRe.test(lines[i])) break;
     const cells = splitCells(lines[i]);
-    if(cells.length >= 2 && headerHint.test(lines[i])){ headerIdx = i; break; }
+    // stop if this looks like a title (single cell) — headers have 2+ cells
+    if(cells.length < 2) break;
+    headerLines.unshift(cells);   // keep top-to-bottom order
   }
-  // fallback: first line that splits into 2+ cells
-  if(headerIdx === -1){
-    for(let i=0; i<lines.length; i++){ if(splitCells(lines[i]).length >= 2){ headerIdx = i; break; } }
+  if(headerLines.length){
+    // the widest header line is the primary one
+    const primary = headerLines.reduce((a,b)=> b.length>=a.length?b:a, headerLines[0]);
+    out.headers = primary.slice();
+    // merge the other header lines into it, aligning from the RIGHT so the
+    // parenthetical "(BB) (RO) (NRF) Period" attaches to the correct columns
+    headerLines.forEach(hl=>{
+      if(hl === primary) return;
+      // if the continuation aligns to the tail columns, append there
+      const offset = out.headers.length - hl.length;
+      hl.forEach((piece,k)=>{
+        const idx = offset >= 0 ? offset + k : k;
+        if(out.headers[idx] !== undefined) out.headers[idx] = (out.headers[idx] + " " + piece).trim();
+      });
+    });
   }
-  if(headerIdx === -1) return out;
+  // normalise header width to the data width
+  while(out.headers.length < colCount) out.headers.push("Column "+(out.headers.length+1));
+  if(out.headers.length > colCount) out.headers = out.headers.slice(0, colCount);
+  if(out.headers.length === 0){
+    out.headers = ["Month","Bed & Breakfast (BB)","Room Only (RO)","Non-Refundable (NRF)","Release Period","Allotment"].slice(0,colCount);
+  }
 
-  // title = a short line above the header (e.g. "Deluxe Room Rates")
-  for(let i=headerIdx-1; i>=0 && i>=headerIdx-3; i--){
+  // ---- 3) title: the nearest single-cell line above the data/header block ----
+  for(let i=firstData-1; i>=0 && i>=firstData-6; i--){
     const t = lines[i].trim();
-    if(t && splitCells(lines[i]).length <= 1 && !/^valid|^rate sheet$/i.test(t)){ out.title = t; break; }
+    if(t && splitCells(lines[i]).length <= 1 && !/^valid|^rate sheet$/i.test(t) && !footerRe.test(t)){ out.title = t; break; }
   }
 
-  out.headers = splitCells(lines[headerIdx]);
-  const colCount = out.headers.length;
-
-  // 2) collect data rows after the header. A data row has a value in the first
-  //    column and at least one number somewhere. Merge a continuation line that
-  //    has fewer cells (wrapped row).
-  const stopRe = /^(rates?\s+are\s+quoted|terms|conditions|cancellation|no\s*show)/i;
-  for(let i=headerIdx+1; i<lines.length; i++){
-    if(stopRe.test(lines[i].trim())) break;
+  // ---- 4) build the rows (only the real data rows) ----
+  for(const i of dataIdx){
     let cells = splitCells(lines[i]);
-    if(cells.length < 2) continue;         // skip stray single-cell lines
-    if(!/\d/.test(lines[i])) continue;     // a rate row has at least one number
-    // pad/truncate to the header width so columns line up
     if(cells.length < colCount) while(cells.length < colCount) cells.push("");
     if(cells.length > colCount) cells = cells.slice(0, colCount-1).concat(cells.slice(colCount-1).join(" "));
     out.rows.push(cells);
