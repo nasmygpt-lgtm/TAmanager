@@ -324,7 +324,22 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
         </div>
       </div>
 
-      <label>Rates by month</label>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px">
+        <label style="margin:0">Rates</label>
+        <div style="display:flex; gap:0; border:1px solid var(--line); border-radius:8px; overflow:hidden">
+          <button type="button" class="mode-btn active" data-mode="table" id="modeTableBtn" style="border:none; padding:7px 14px; font-size:13px; font-weight:700; cursor:pointer; background:var(--brand); color:#fff">📊 Table</button>
+          <button type="button" class="mode-btn" data-mode="text" id="modeTextBtn" style="border:none; padding:7px 14px; font-size:13px; font-weight:700; cursor:pointer; background:#eef2f7; color:#334155">📝 Simple text</button>
+        </div>
+      </div>
+      <p class="hint" style="margin-top:4px">Use <strong>Simple text</strong> to store the rates exactly as they appear in your file (no columns) — best when the layout is complex.</p>
+
+      <!-- SIMPLE TEXT MODE -->
+      <div id="textMode" style="display:none">
+        <textarea id="fPlainText" rows="10" placeholder="The rates from your file appear here as text. Edit freely — it will be shown exactly like this."></textarea>
+      </div>
+
+      <!-- TABLE MODE -->
+      <div id="tableMode">
       <div style="overflow-x:auto">
       <table id="rateTable">
         <thead>
@@ -347,6 +362,7 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
         <button class="btn primary sm" id="rereadBtn" style="display:none">🔄 Re-read from screenshot</button>
       </div>
       <p class="hint">One row per month. Fill only the columns you have. <strong>BB</strong> = Bed &amp; Breakfast, <strong>RO</strong> = Room Only, <strong>NRF</strong> = Non-Refundable, plus <strong>Release Period</strong> &amp; <strong>Allotment</strong>. Values like <code>255</code>, <code>5%</code>, <code>2 Days</code>, <code>3 Rooms</code>.</p>
+      </div><!-- /tableMode -->
 
       <div>
         <label style="margin-top:16px">Notes (optional)</label>
@@ -589,21 +605,28 @@ async function ocrImage(dataURL){
    left→right, so table rows come out as separate lines the parser can read. */
 function itemsToText(items){
   if(!items || !items.length) return "";
+  // Estimate a line height from the items' font sizes so the row tolerance
+  // adapts to the document (fixes wide table rows being split into pieces).
+  const heights = items.map(it=> Math.abs(it.transform ? it.transform[3] : 0)).filter(Boolean).sort((a,b)=>a-b);
+  const medianH = heights.length ? heights[Math.floor(heights.length/2)] : 10;
+  const yTol = Math.max(4, medianH * 0.6); // adaptive: ~60% of a line height
+
   const rows = [];
-  const yTol = 3; // pixels — items within this Y distance are the same line
   for(const it of items){
     const str = (it.str || "");
-    if(!str.trim() && !it.hasEOL) continue;
+    if(!str.trim()) continue;
     const y = it.transform ? it.transform[5] : 0;
     const x = it.transform ? it.transform[4] : 0;
+    // match against the row's running average Y (not a frozen anchor)
     let row = rows.find(r => Math.abs(r.y - y) <= yTol);
-    if(!row){ row = { y, parts: [] }; rows.push(row); }
+    if(!row){ row = { y, n:0, parts: [] }; rows.push(row); }
     row.parts.push({ x, str });
+    row.y = (row.y * row.n + y) / (row.n + 1); // update running average
+    row.n++;
   }
   rows.sort((a,b)=> b.y - a.y); // PDF Y grows upward, so higher Y = higher on page
   return rows.map(r=>{
     r.parts.sort((a,b)=> a.x - b.x);
-    // join fragments on a line with 2 spaces so column boundaries survive
     return r.parts.map(p=>p.str).join("  ").replace(/\s{3,}/g,"  ").trim();
   }).filter(Boolean).join("\n");
 }
@@ -738,8 +761,30 @@ function parseRates(text){
     if(prices[0]) row.bb = prices[0];
     if(prices[1]) row.ro = prices[1];
 
-    if(row.period || row.bb || row.ro || row.nrf || row.release || row.allotment) result.rows.push(row);
+    // Skip rows that have a month but NO actual rate data (these are the
+    // "blank" split-off fragments). A real row must have at least a BB or RO price.
+    const hasData = row.bb || row.ro || row.nrf || row.release || row.allotment;
+    if(!hasData) continue;
+
+    // De-duplicate: if we already captured an identical row, skip it.
+    const key = [row.period,row.bb,row.ro,row.nrf,row.release,row.allotment].join("|");
+    if(result.rows.some(x=> [x.period,x.bb,x.ro,x.nrf,x.release,x.allotment].join("|") === key)) continue;
+
+    result.rows.push(row);
   }
+
+  // Merge fragments of the SAME month: if two rows share a period and one only
+  // fills gaps the other left blank, combine them into one complete row.
+  const merged = [];
+  for(const row of result.rows){
+    const same = merged.find(x=> x.period === row.period);
+    if(same){
+      ["bb","ro","nrf","release","allotment"].forEach(k=>{ if(!same[k] && row[k]) same[k] = row[k]; });
+    } else {
+      merged.push(row);
+    }
+  }
+  result.rows = merged;
 
   return result;
 }
@@ -783,6 +828,8 @@ function openReview(text){
   $("#rawText").style.display = "none";
   $("#rawTextToggle").textContent = "▸ Show raw text the reader extracted";
   renderReferencePane();
+  // load the extracted text into the Simple-text box (cleaned up a little)
+  $("#fPlainText").value = (text||"").replace(/\n{3,}/g,"\n\n").trim();
 
   // default year = current
   if(!$("#fYear").value) $("#fYear").value = new Date().getFullYear();
@@ -825,6 +872,21 @@ function addRateRow(r={}){
   $("#rateBody").appendChild(tr);
 }
 $("#addRowBtn").addEventListener("click", ()=> addRateRow());
+
+/* ---- Table vs Simple-text mode toggle ---- */
+let entryMode = "table"; // "table" or "text"
+function setMode(mode){
+  entryMode = mode;
+  const isTable = mode === "table";
+  $("#tableMode").style.display = isTable ? "" : "none";
+  $("#textMode").style.display  = isTable ? "none" : "";
+  $("#modeTableBtn").style.background = isTable ? "var(--brand)" : "#eef2f7";
+  $("#modeTableBtn").style.color      = isTable ? "#fff" : "#334155";
+  $("#modeTextBtn").style.background  = isTable ? "#eef2f7" : "var(--brand)";
+  $("#modeTextBtn").style.color       = isTable ? "#334155" : "#fff";
+}
+$("#modeTableBtn").addEventListener("click", ()=> setMode("table"));
+$("#modeTextBtn").addEventListener("click", ()=> setMode("text"));
 $("#rawTextToggle").addEventListener("click", ()=>{
   const el = $("#rawText");
   const show = el.style.display==="none";
@@ -843,6 +905,8 @@ function resetAddForm(){
   $("#fRoomType").value="Deluxe Room"; $("#fPromo").value="";
   $("#rateBody").innerHTML="";
   $("#pasteBox").value="";
+  $("#fPlainText").value="";
+  setMode("table");
   pendingFile=null; pendingDataURL=null;
   fileInput.value="";
 }
@@ -855,6 +919,7 @@ $("#saveBtn").addEventListener("click", async ()=>{
   if(!company){ toast("Please enter a company name","err"); $("#fCompany").focus(); return; }
   // Month is optional — rate sheets often cover several months (captured per row).
 
+  const plainText = $("#fPlainText").value.trim();
   const rates = [];
   $("#rateBody").querySelectorAll("tr").forEach(tr=>{
     const period = tr.querySelector(".period").value.trim();
@@ -865,7 +930,12 @@ $("#saveBtn").addEventListener("click", async ()=>{
     const allotment = tr.querySelector(".allotment").value.trim();
     if(period || bb || ro || nrf || release || allotment) rates.push({period, bb, ro, nrf, release, allotment});
   });
-  if(rates.length===0){ toast("Add at least one rate row","err"); return; }
+  // Validation depends on the chosen mode
+  if(entryMode === "text"){
+    if(!plainText){ toast("Add the rate text, or switch to Table mode","err"); return; }
+  } else {
+    if(rates.length===0){ toast("Add at least one rate row, or use Simple text mode","err"); return; }
+  }
 
   // resolve the file to attach
   let fileId = null;
@@ -887,6 +957,8 @@ $("#saveBtn").addEventListener("click", async ()=>{
     roomType: $("#fRoomType").value.trim(),
     promo: $("#fPromo").value.trim(),
     rates,          // array of {period, bb, ro, nrf, release, allotment}
+    plainText,      // raw text version (used when displayMode === "text")
+    displayMode: entryMode,   // "table" or "text"
     schema: 3,      // multi-column format incl. release period + per-row allotment
     notes: $("#fNotes").value.trim(),
     fileId,
@@ -957,7 +1029,10 @@ function recordBlock(r){
   const aed = v => (v===null||v===undefined||v==="") ? "—" : (/%|\bTD\b|[a-zA-Z]/.test(String(v)) ? esc(v) : "AED "+fmtAED(v));
   let rateTable;
 
-  if((r.schema === 2 || r.schema === 3) && Array.isArray(r.rates)){
+  if(r.displayMode === "text" && r.plainText){
+    // SIMPLE TEXT mode — show the rates exactly as stored, no columns
+    rateTable = `<pre style="white-space:pre-wrap; font-family:inherit; font-size:14px; margin:0; background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:12px; line-height:1.6">${esc(r.plainText)}</pre>`;
+  } else if((r.schema === 2 || r.schema === 3) && Array.isArray(r.rates)){
     // new multi-column hotel format (Month, BB, RO, NRF, Release Period, Allotment)
     const hasRelease   = r.rates.some(x=> x.release);
     const hasAllotment = r.rates.some(x=> x.allotment);
@@ -1078,6 +1153,9 @@ async function editRecord(id){
              ? (r.rates||[]).map(x=>({period:x.desc||"", bb:"", ro:"", nrf: x.rate==null?"":String(x.rate), release:"", allotment:""}))
              : r.rates;
   if(rows.length) rows.forEach(x=> addRateRow(x)); else addRateRow();
+  // restore the display mode + simple text
+  $("#fPlainText").value = r.plainText || "";
+  setMode(r.displayMode === "text" ? "text" : "table");
   // mark that we're editing so Save replaces instead of adding a new one
   editingId = id;
   $("#reviewCard").style.display = "block";
