@@ -934,6 +934,53 @@ function parseRates(text){
    It does not force any fixed columns — it detects the header row and splits
    every line into cells by 2+ spaces (how our PDF/OCR text separates columns).
    The user reviews the grid before saving. */
+/* Split a single-spaced OCR line into cells by recognising value patterns.
+   Handles rows like: "October 2026 AED 255 AED 230 5% 1 Day"
+   and header lines like: "Month Bed & Breakfast Room Only Non-Refundable Release". */
+function smartSplit(line){
+  if(!line) return [];
+  // value tokens that mark the START of a new cell
+  const valueRe = /(aed|dhs?)\s*\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s*%|\d+\s*(?:days?|nights?|rooms?|hrs?|hours?)\b|\d[\d,]*(?:\.\d+)?/gi;
+  // If the line has 2+ value tokens, split around them: leading label + each value
+  let vals = [...line.matchAll(valueRe)];
+  // A 4-digit year right after a month word is part of the label, not a value —
+  // drop such tokens so "October 2026" stays as one cell.
+  vals = vals.filter(m=>{
+    if(/^\d{4}$/.test(m[0].trim()) && +m[0] >= 1990 && +m[0] <= 2100){
+      const before = line.slice(0, m.index).trim();
+      if(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?$/i.test(before)) return false;
+    }
+    return true;
+  });
+  if(vals.length >= 2){
+    const cells = [];
+    let cursor = 0;
+    // leading text before the first value is the row label (e.g. the month)
+    const firstStart = vals[0].index;
+    const label = line.slice(0, firstStart).trim();
+    if(label) cells.push(label);
+    for(let i=0;i<vals.length;i++){
+      const start = vals[i].index;
+      const end = (i+1<vals.length) ? vals[i+1].index : line.length;
+      cells.push(line.slice(start, end).trim());
+    }
+    return cells.filter(Boolean);
+  }
+  // header line (no numbers): split on known column keywords
+  const headerKw = /(rate\s*type|month|bed\s*&?\s*breakfast\s*\(bb\)?|\(bb\)|room\s*only\s*\(ro\)?|\(ro\)|non[- ]?refundable\s*\(nrf\)?|\(nrf\)|release\s*period|release|allotment|supplement|meal\s*plan|period|price)/gi;
+  const hits = [...line.matchAll(headerKw)];
+  if(hits.length >= 2){
+    const cells = [];
+    for(let i=0;i<hits.length;i++){
+      const start = hits[i].index;
+      const end = (i+1<hits.length) ? hits[i+1].index : line.length;
+      cells.push(line.slice(start,end).trim());
+    }
+    return cells.filter(Boolean);
+  }
+  return [line];
+}
+
 function parseGenericTable(text){
   const out = { title:"", headers:[], rows:[] };
   let lines = text.split(/\r?\n/).map(l=>l.replace(/\s+$/,"")).filter(l=>l.trim());
@@ -960,7 +1007,15 @@ function parseGenericTable(text){
   }
   lines = stitched;
 
-  const splitCells = l => l.trim().split(/\s{2,}|\t|\s*\|\s*/).map(c=>c.trim()).filter(Boolean);
+  // Split a line into cells. First try 2+ spaces / tabs / pipes (clean PDF text).
+  // If that yields only ONE cell but the line clearly has multiple values
+  // (common with OCR that uses single spaces), fall back to a value-aware
+  // splitter that recognises AED amounts, %, "N Day(s)", "N Room(s)", months.
+  const splitCells = l => {
+    let cells = l.trim().split(/\s{2,}|\t|\s*\|\s*/).map(c=>c.trim()).filter(Boolean);
+    if(cells.length >= 2) return cells;
+    return smartSplit(l.trim());
+  };
 
   // Lines that belong to OTHER sections (footers/policies) — never data rows.
   const footerRe = /\b(cancellation|no\s*show|penalty|extra\s*bed|child|cnb|meal\s*plan|half\s*board|full\s*board|supplement|event|peak|diwali|new\s*year|expo|gulf\s*food|big\s*5|rates?\s+are\s+quoted|valid\b|terms|conditions|policy)\b/i;
