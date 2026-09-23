@@ -200,6 +200,19 @@
   .ref-holder img{max-width:100%; border-radius:8px; cursor:zoom-in}
   .ref-holder iframe{width:100%; height:60vh; border:none; border-radius:8px}
   .review-form{min-width:0}
+
+  /* Record body: rates + inline screenshot thumbnail */
+  .rec-body{display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap}
+  .rec-rates{flex:1 1 320px; min-width:0}
+  .rec-thumb-wrap{flex:0 0 auto}
+  .rec-thumb{
+    max-width:200px; max-height:150px; border:1px solid var(--line); border-radius:8px;
+    cursor:zoom-in; background:#f1f5f9;
+  }
+  @media (max-width:600px){ .rec-thumb{max-width:100%} }
+  /* Emphasise the Non-Refundable column (discounts like 5%) */
+  .nrf-cell{background:#fff7ed; font-weight:700; color:#b45309}
+  th.nrf-cell{background:#fef3c7; color:#92400e}
 </style>
 </head>
 <body>
@@ -477,6 +490,7 @@ document.querySelectorAll(".tab-btn").forEach(b=>{
    ============================================================ */
 let pendingFile = null;      // {blob, name, type}
 let pendingDataURL = null;   // for image preview / storage
+let editingId = null;        // id of the record being edited (null = new)
 
 const drop = $("#drop");
 const fileInput = $("#fileInput");
@@ -779,6 +793,8 @@ $("#rawTextToggle").addEventListener("click", ()=>{
 $("#cancelBtn").addEventListener("click", resetAddForm);
 
 function resetAddForm(){
+  editingId = null;
+  $("#saveBtn").textContent = "💾 Save these rates";
   $("#reviewCard").style.display="none";
   $("#refHolder").innerHTML="";
   $("#fCompany").value=""; $("#fMonth").value=""; $("#fNotes").value="";
@@ -808,14 +824,21 @@ $("#saveBtn").addEventListener("click", async ()=>{
   });
   if(rates.length===0){ toast("Add at least one rate row","err"); return; }
 
+  // resolve the file to attach
   let fileId = null;
-  if(pendingFile && pendingDataURL){
+  let existing = null;
+  if(editingId){
+    existing = await getOne("rates", editingId);
+    fileId = existing ? existing.fileId : null;   // keep the already-stored file
+  }
+  // if a NEW file was provided that isn't the stored one, save it
+  if(pendingFile && pendingDataURL && !(existing && existing.fileId)){
     fileId = uid();
     await put("files", { id:fileId, name:pendingFile.name, type:pendingFile.type, dataURL:pendingDataURL });
   }
 
   const record = {
-    id: uid(),
+    id: editingId || uid(),
     company, companyLower: company.toLowerCase(),
     month, year, currency:"AED",
     roomType: $("#fRoomType").value.trim(),
@@ -825,14 +848,17 @@ $("#saveBtn").addEventListener("click", async ()=>{
     schema: 2,      // marks the new multi-column format
     notes: $("#fNotes").value.trim(),
     fileId,
-    fileName: pendingFile ? pendingFile.name : null,
-    createdAt: Date.now()
+    fileName: pendingFile ? pendingFile.name : (existing ? existing.fileName : null),
+    createdAt: existing ? existing.createdAt : Date.now(),
+    updatedAt: Date.now()
   };
   await put("rates", record);
-  toast("Saved ✔  "+company+" · "+month+" "+year, "ok");
+  toast((editingId? "Updated ✔  ":"Saved ✔  ")+company+" · "+month+" "+year, "ok");
   resetAddForm();
   refreshStats();
   refreshCompanyList();
+  renderAll();
+  renderSearch($("#searchInput").value);
 });
 
 /* ============================================================
@@ -896,12 +922,12 @@ function recordBlock(r){
         <td><strong>${esc(x.period||"—")}</strong></td>
         <td>${x.bb?("AED "+esc(x.bb)) : "—"}</td>
         <td>${x.ro?("AED "+esc(x.ro)) : "—"}</td>
-        <td>${x.nrf? esc(x.nrf) : "—"}</td>
+        <td class="nrf-cell">${x.nrf? esc(x.nrf) : '<span class="muted">—</span>'}</td>
         ${hasNote? `<td>${esc(x.note||"")}</td>`:""}
       </tr>`).join("");
     rateTable = `<div style="overflow-x:auto"><table>
       <thead><tr>
-        <th>Month / Period</th><th>Bed &amp; Breakfast (BB)</th><th>Room Only (RO)</th><th>Non-Refundable (NRF)</th>${hasNote?"<th>Notes</th>":""}
+        <th>Month / Period</th><th>Bed &amp; Breakfast (BB)</th><th>Room Only (RO)</th><th class="nrf-cell">Non-Refundable (NRF)</th>${hasNote?"<th>Notes</th>":""}
       </tr></thead><tbody>${body}</tbody></table></div>`;
   } else {
     // legacy format: {desc, rate}
@@ -920,6 +946,13 @@ function recordBlock(r){
   const fileBtn = r.fileId
     ? `<span class="file-pill view-file" data-file="${r.fileId}" data-name="${esc(r.fileName||"file")}">📎 ${esc(r.fileName||"View file")}</span>`
     : `<span class="muted" style="font-size:12px">No file attached</span>`;
+
+  // Inline thumbnail — lazy-loaded from IndexedDB after render, so you can
+  // see the screenshot right in the results without opening it.
+  const thumb = r.fileId
+    ? `<img class="rec-thumb" data-thumb="${r.fileId}" data-name="${esc(r.fileName||"file")}" alt="screenshot preview" title="Click to open full size" />`
+    : "";
+
   return `<div style="border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:12px">
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px">
       <span class="chip month">${esc(r.month)}</span>
@@ -927,10 +960,14 @@ function recordBlock(r){
       <span class="chip">AED</span>
       <span style="flex:1"></span>
       ${fileBtn}
+      <button class="btn ghost sm edit-rec" data-id="${r.id}">✏️ Edit</button>
       <button class="btn danger sm del-rec" data-id="${r.id}" data-file="${r.fileId||""}">Delete</button>
     </div>
     ${meta? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px">${meta}</div>`:""}
-    ${rateTable}
+    <div class="rec-body">
+      <div class="rec-rates">${rateTable}</div>
+      ${thumb? `<div class="rec-thumb-wrap">${thumb}</div>`:""}
+    </div>
     ${r.notes? `<p class="hint">📝 ${esc(r.notes)}</p>`:""}
   </div>`;
 }
@@ -950,6 +987,56 @@ function attachRecordHandlers(scope){
       renderAll();
     });
   });
+  scope.querySelectorAll(".edit-rec").forEach(el=>{
+    el.addEventListener("click", ()=> editRecord(el.dataset.id));
+  });
+  // lazy-load inline screenshot thumbnails from IndexedDB
+  scope.querySelectorAll(".rec-thumb").forEach(async img=>{
+    const f = await getOne("files", img.dataset.thumb);
+    if(f && f.type && f.type.indexOf("pdf") === -1){
+      img.src = f.dataURL;
+      img.addEventListener("click", ()=> viewFileData(f.dataURL, f.type, img.dataset.name));
+    } else if(f){
+      // PDF — show a document badge instead of an image
+      img.replaceWith(Object.assign(document.createElement("span"),{
+        className:"file-pill", textContent:"📄 "+(img.dataset.name||"PDF")
+      }));
+    }
+  });
+}
+
+/* ---------- Edit an existing record (load it back into the form) ---------- */
+async function editRecord(id){
+  const r = await getOne("rates", id);
+  if(!r){ toast("Record not found","err"); return; }
+  // switch to Add tab
+  document.querySelector('.tab-btn[data-tab="add"]').click();
+  // header fields
+  $("#fCompany").value = r.company || "";
+  $("#fMonth").value = r.month || "";
+  $("#fYear").value = r.year || "";
+  $("#fRoomType").value = r.roomType || "Deluxe Room";
+  $("#fPromo").value = r.promo || "";
+  $("#fAllotment").value = r.allotment || "";
+  $("#fNotes").value = r.notes || "";
+  // load the stored file into the reference pane if present
+  pendingFile = null; pendingDataURL = null;
+  if(r.fileId){
+    const f = await getOne("files", r.fileId);
+    if(f){ pendingFile = {name:f.name, type:f.type}; pendingDataURL = f.dataURL; }
+  }
+  // rows
+  $("#rateBody").innerHTML = "";
+  const rows = (r.schema===2 && Array.isArray(r.rates)) ? r.rates
+             : (r.rates||[]).map(x=>({period:x.desc||"", bb:"", ro:"", nrf: x.rate==null?"":String(x.rate), note:""}));
+  if(rows.length) rows.forEach(x=> addRateRow(x)); else addRateRow();
+  // mark that we're editing so Save replaces instead of adding a new one
+  editingId = id;
+  $("#reviewCard").style.display = "block";
+  renderReferencePane();
+  $("#saveBtn").textContent = "💾 Update this record";
+  $("#reviewCard").scrollIntoView({behavior:"smooth"});
+  toast("Editing — make your changes and click Update");
 }
 
 /* ---------- File viewer ---------- */
