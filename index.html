@@ -121,6 +121,9 @@
   td.num,th.num{text-align:right}
 
   .rate-input{padding:8px 10px}
+  .grid-cell{padding:8px 10px; width:100%; min-width:90px}
+  .grid-head-input{padding:6px 8px; width:100%; min-width:90px; font-weight:700; background:#f8fafc}
+  #gridTable th{vertical-align:top}
   .chip{
     display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700;
     background:#e0f2fe; color:#0369a1;
@@ -324,45 +327,20 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
         </div>
       </div>
 
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px">
-        <label style="margin:0">Rates</label>
-        <div style="display:flex; gap:0; border:1px solid var(--line); border-radius:8px; overflow:hidden">
-          <button type="button" class="mode-btn active" data-mode="table" id="modeTableBtn" style="border:none; padding:7px 14px; font-size:13px; font-weight:700; cursor:pointer; background:var(--brand); color:#fff">📊 Table</button>
-          <button type="button" class="mode-btn" data-mode="text" id="modeTextBtn" style="border:none; padding:7px 14px; font-size:13px; font-weight:700; cursor:pointer; background:#eef2f7; color:#334155">📝 Simple text</button>
-        </div>
-      </div>
-      <p class="hint" style="margin-top:4px">Use <strong>Simple text</strong> to store the rates exactly as they appear in your file (no columns) — best when the layout is complex.</p>
-
-      <!-- SIMPLE TEXT MODE -->
-      <div id="textMode" style="display:none">
-        <textarea id="fPlainText" rows="10" placeholder="The rates from your file appear here as text. Edit freely — it will be shown exactly like this."></textarea>
-      </div>
-
-      <!-- TABLE MODE -->
-      <div id="tableMode">
+      <label>Rate table <span class="muted" style="font-weight:400">(exactly as in your file — edit any cell)</span></label>
       <div style="overflow-x:auto">
-      <table id="rateTable">
-        <thead>
-          <tr>
-            <th style="min-width:130px">Month</th>
-            <th style="min-width:110px">Bed &amp; Breakfast (BB)</th>
-            <th style="min-width:110px">Room Only (RO)</th>
-            <th style="min-width:110px">Non-Refundable (NRF)</th>
-            <th style="min-width:100px">Release Period</th>
-            <th style="min-width:90px">Allotment</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="rateBody"></tbody>
-      </table>
+        <table id="gridTable">
+          <thead><tr id="gridHead"></tr></thead>
+          <tbody id="gridBody"></tbody>
+        </table>
       </div>
 
       <div class="row-actions">
-        <button class="btn ghost sm" id="addRowBtn">＋ Add period row</button>
-        <button class="btn primary sm" id="rereadBtn" style="display:none">🔄 Re-read from screenshot</button>
+        <button class="btn ghost sm" id="addColBtn">＋ Add column</button>
+        <button class="btn ghost sm" id="addRowBtn">＋ Add row</button>
+        <button class="btn primary sm" id="rereadBtn" style="display:none">🔄 Re-read from file</button>
       </div>
-      <p class="hint">One row per month. Fill only the columns you have. <strong>BB</strong> = Bed &amp; Breakfast, <strong>RO</strong> = Room Only, <strong>NRF</strong> = Non-Refundable, plus <strong>Release Period</strong> &amp; <strong>Allotment</strong>. Values like <code>255</code>, <code>5%</code>, <code>2 Days</code>, <code>3 Rooms</code>.</p>
-      </div><!-- /tableMode -->
+      <p class="hint">This shows the same table found in your file. Rename a column by editing its header; remove a column with the ✕ under it. Values keep whatever you type (e.g. <code>AED 260.00</code>, <code>5%</code>, <code>2 Days</code>).</p>
 
       <div>
         <label style="margin-top:16px">Notes (optional)</label>
@@ -850,6 +828,58 @@ function parseRates(text){
   return result;
 }
 
+/* ---------- GENERIC table reader ("show the table as-is") ----------
+   Reads WHATEVER table is in the file and returns {title, headers:[], rows:[[]]}.
+   It does not force any fixed columns — it detects the header row and splits
+   every line into cells by 2+ spaces (how our PDF/OCR text separates columns).
+   The user reviews the grid before saving. */
+function parseGenericTable(text){
+  const out = { title:"", headers:[], rows:[] };
+  const lines = text.split(/\r?\n/).map(l=>l.replace(/\s+$/,"")).filter(l=>l.trim());
+  if(!lines.length) return out;
+
+  const splitCells = l => l.trim().split(/\s{2,}|\t|\s*\|\s*/).map(c=>c.trim()).filter(Boolean);
+
+  // 1) find the header row: the first line with 2+ cells that contains known
+  //    column words, OR just the first multi-cell line near the top.
+  const headerHint = /(rate\s*type|month|bed\s*&?\s*breakfast|\bbb\b|room\s*only|\bro\b|non[- ]?refundable|\bnrf\b|release|allot|supplement|meal|plan|period|price|rate\b)/i;
+  let headerIdx = -1;
+  for(let i=0; i<lines.length; i++){
+    const cells = splitCells(lines[i]);
+    if(cells.length >= 2 && headerHint.test(lines[i])){ headerIdx = i; break; }
+  }
+  // fallback: first line that splits into 2+ cells
+  if(headerIdx === -1){
+    for(let i=0; i<lines.length; i++){ if(splitCells(lines[i]).length >= 2){ headerIdx = i; break; } }
+  }
+  if(headerIdx === -1) return out;
+
+  // title = a short line above the header (e.g. "Deluxe Room Rates")
+  for(let i=headerIdx-1; i>=0 && i>=headerIdx-3; i--){
+    const t = lines[i].trim();
+    if(t && splitCells(lines[i]).length <= 1 && !/^valid|^rate sheet$/i.test(t)){ out.title = t; break; }
+  }
+
+  out.headers = splitCells(lines[headerIdx]);
+  const colCount = out.headers.length;
+
+  // 2) collect data rows after the header. A data row has a value in the first
+  //    column and at least one number somewhere. Merge a continuation line that
+  //    has fewer cells (wrapped row).
+  const stopRe = /^(rates?\s+are\s+quoted|terms|conditions|cancellation|no\s*show)/i;
+  for(let i=headerIdx+1; i<lines.length; i++){
+    if(stopRe.test(lines[i].trim())) break;
+    let cells = splitCells(lines[i]);
+    if(cells.length < 2) continue;         // skip stray single-cell lines
+    if(!/\d/.test(lines[i])) continue;     // a rate row has at least one number
+    // pad/truncate to the header width so columns line up
+    if(cells.length < colCount) while(cells.length < colCount) cells.push("");
+    if(cells.length > colCount) cells = cells.slice(0, colCount-1).concat(cells.slice(colCount-1).join(" "));
+    out.rows.push(cells);
+  }
+  return out;
+}
+
 /* Detect the first month mentioned in a block of text, return the full
    month name (e.g. "October") or "" if none found. Used to auto-fill the
    month field when the user pastes a message. */
@@ -882,72 +912,94 @@ function renderReferencePane(){
   }
 }
 
-/* ---------- Review form ---------- */
+/* ---------- Review form (generic table grid) ---------- */
 function openReview(text){
   $("#reviewCard").style.display = "block";
   $("#rawText").textContent = text || "(no text detected)";
   $("#rawText").style.display = "none";
   $("#rawTextToggle").textContent = "▸ Show raw text the reader extracted";
   renderReferencePane();
-  // load the extracted text into the Simple-text box (cleaned up a little)
-  $("#fPlainText").value = (text||"").replace(/\n{3,}/g,"\n\n").trim();
 
-  // default year = current
   if(!$("#fYear").value) $("#fYear").value = new Date().getFullYear();
 
-  const parsed = parseRates(text);
-  // fill header fields if detected (don't overwrite what the user already typed)
-  if(parsed.roomType && !$("#fRoomType").value) $("#fRoomType").value = parsed.roomType;
-  if(parsed.promo && !$("#fPromo").value) $("#fPromo").value = parsed.promo;
+  // Read WHATEVER table is in the file — headers + rows, as-is.
+  const table = parseGenericTable(text);
+  // Auto-fill room type / promo from the detected title if we can
+  if(table.title && !$("#fRoomType").value) $("#fRoomType").value = table.title.replace(/\s*rates?$/i,"").trim() || table.title;
+  const pr = text.match(/promo\s*[:\-]?\s*(.+)/i);
+  if(pr && !$("#fPromo").value) $("#fPromo").value = pr[1].replace(/\|.*$/,"").trim();
 
-  const rows = parsed.rows;
-  const body = $("#rateBody");
-  body.innerHTML = "";
-  if(rows.length===0){
-    addRateRow();
+  if(table.headers.length){
+    renderGrid(table.headers, table.rows.length ? table.rows : [table.headers.map(()=> "")]);
+    toast(`Found a table with ${table.rows.length} row(s) — please check`,"ok");
   } else {
-    rows.forEach(r=> addRateRow(r));
+    // nothing detected — start an empty 3-column grid the user can fill
+    renderGrid(["Rate Type","Bed & Breakfast (BB)","Room Only (RO)"], [["",""]]);
   }
+
   refreshCompanyList();
   $("#reviewCard").scrollIntoView({behavior:"smooth"});
-  if(rows.length) toast(`Found ${rows.length} rate row${rows.length>1?"s":""} — please review`,"ok");
 }
 
-function addRateRow(r={}){
-  const period = r.period ?? "";
-  const bb = r.bb ?? "";
-  const ro = r.ro ?? "";
-  const nrf = r.nrf ?? "";
-  const release = r.release ?? "";
-  const allotment = r.allotment ?? "";
-  const tr = document.createElement("tr");
-  tr.innerHTML = `
-    <td><input class="rate-input period" value="${esc(period)}" placeholder="e.g. October 2026" /></td>
-    <td><input class="rate-input bb" value="${esc(bb)}" placeholder="e.g. 255" /></td>
-    <td><input class="rate-input ro" value="${esc(ro)}" placeholder="e.g. 230" /></td>
-    <td><input class="rate-input nrf" value="${esc(nrf)}" placeholder="e.g. 5%" /></td>
-    <td><input class="rate-input release" value="${esc(release)}" placeholder="e.g. 2 Days" /></td>
-    <td><input class="rate-input allotment" value="${esc(allotment)}" placeholder="e.g. 3 Rooms" /></td>
-    <td><button class="btn danger sm rm">✕</button></td>`;
-  tr.querySelector(".rm").addEventListener("click", ()=> tr.remove());
-  $("#rateBody").appendChild(tr);
-}
-$("#addRowBtn").addEventListener("click", ()=> addRateRow());
+/* ---- Dynamic grid: columns come from the file, everything editable ---- */
+function renderGrid(headers, rows){
+  const head = $("#gridHead");
+  const body = $("#gridBody");
+  const cols = headers.length;
 
-/* ---- Table vs Simple-text mode toggle ---- */
-let entryMode = "table"; // "table" or "text"
-function setMode(mode){
-  entryMode = mode;
-  const isTable = mode === "table";
-  $("#tableMode").style.display = isTable ? "" : "none";
-  $("#textMode").style.display  = isTable ? "none" : "";
-  $("#modeTableBtn").style.background = isTable ? "var(--brand)" : "#eef2f7";
-  $("#modeTableBtn").style.color      = isTable ? "#fff" : "#334155";
-  $("#modeTextBtn").style.background  = isTable ? "#eef2f7" : "var(--brand)";
-  $("#modeTextBtn").style.color       = isTable ? "#334155" : "#fff";
+  // header row: editable header inputs + a remove-column button under each
+  head.innerHTML = headers.map((h,c)=>`
+    <th style="min-width:120px">
+      <input class="grid-head-input" data-col="${c}" value="${esc(h)}" />
+      <div style="text-align:center"><button class="del-col" data-col="${c}" title="Remove column" style="border:none;background:none;color:var(--red);cursor:pointer;font-size:12px">✕ col</button></div>
+    </th>`).join("") + `<th></th>`;
+
+  body.innerHTML = rows.map(r=>{
+    const cells = [];
+    for(let c=0;c<cols;c++) cells.push(r[c] ?? "");
+    return `<tr>${cells.map(v=>`<td><input class="grid-cell" value="${esc(v)}" /></td>`).join("")}<td><button class="btn danger sm rm">✕</button></td></tr>`;
+  }).join("");
+
+  // wire buttons
+  body.querySelectorAll(".rm").forEach(b=> b.addEventListener("click", ()=> b.closest("tr").remove()));
+  head.querySelectorAll(".del-col").forEach(b=> b.addEventListener("click", ()=> removeColumn(+b.dataset.col)));
 }
-$("#modeTableBtn").addEventListener("click", ()=> setMode("table"));
-$("#modeTextBtn").addEventListener("click", ()=> setMode("text"));
+
+function readGrid(){
+  const headers = [...$("#gridHead").querySelectorAll(".grid-head-input")].map(i=> i.value.trim());
+  const rows = [...$("#gridBody").querySelectorAll("tr")].map(tr=>
+    [...tr.querySelectorAll(".grid-cell")].map(i=> i.value.trim())
+  ).filter(r=> r.some(c=> c !== "")); // drop fully-empty rows
+  return { headers, rows };
+}
+
+function removeColumn(col){
+  const t = readGrid();
+  t.headers.splice(col,1);
+  t.rows.forEach(r=> r.splice(col,1));
+  if(t.headers.length===0){ t.headers=["Column 1"]; t.rows=[[""]]; }
+  renderGrid(t.headers, t.rows.length?t.rows:[t.headers.map(()=> "")]);
+}
+
+$("#addRowBtn").addEventListener("click", ()=>{
+  const t = readGrid();
+  t.rows.push(t.headers.map(()=> ""));
+  renderGrid(t.headers, t.rows);
+});
+$("#addColBtn").addEventListener("click", ()=>{
+  const t = readGrid();
+  t.headers.push("New column");
+  t.rows.forEach(r=> r.push(""));
+  if(t.rows.length===0) t.rows=[t.headers.map(()=> "")];
+  renderGrid(t.headers, t.rows);
+});
+$("#rawTextToggle").addEventListener("click", ()=>{
+  const el = $("#rawText");
+  const show = el.style.display==="none";
+  el.style.display = show ? "block":"none";
+  $("#rawTextToggle").textContent = (show?"▾ Hide":"▸ Show") + " raw text the reader extracted";
+});
+$("#cancelBtn").addEventListener("click", resetAddForm);
 $("#rawTextToggle").addEventListener("click", ()=>{
   const el = $("#rawText");
   const show = el.style.display==="none";
@@ -964,10 +1016,8 @@ function resetAddForm(){
   $("#refHolder").innerHTML="";
   $("#fCompany").value=""; $("#fMonth").value=""; $("#fNotes").value="";
   $("#fRoomType").value="Deluxe Room"; $("#fPromo").value="";
-  $("#rateBody").innerHTML="";
+  $("#gridHead").innerHTML=""; $("#gridBody").innerHTML="";
   $("#pasteBox").value="";
-  $("#fPlainText").value="";
-  setMode("table");
   pendingFile=null; pendingDataURL=null;
   fileInput.value="";
 }
@@ -980,23 +1030,9 @@ $("#saveBtn").addEventListener("click", async ()=>{
   if(!company){ toast("Please enter a company name","err"); $("#fCompany").focus(); return; }
   // Month is optional — rate sheets often cover several months (captured per row).
 
-  const plainText = $("#fPlainText").value.trim();
-  const rates = [];
-  $("#rateBody").querySelectorAll("tr").forEach(tr=>{
-    const period = tr.querySelector(".period").value.trim();
-    const bb = tr.querySelector(".bb").value.trim();
-    const ro = tr.querySelector(".ro").value.trim();
-    const nrf = tr.querySelector(".nrf").value.trim();
-    const release = tr.querySelector(".release").value.trim();
-    const allotment = tr.querySelector(".allotment").value.trim();
-    if(period || bb || ro || nrf || release || allotment) rates.push({period, bb, ro, nrf, release, allotment});
-  });
-  // Validation depends on the chosen mode
-  if(entryMode === "text"){
-    if(!plainText){ toast("Add the rate text, or switch to Table mode","err"); return; }
-  } else {
-    if(rates.length===0){ toast("Add at least one rate row, or use Simple text mode","err"); return; }
-  }
+  // Read the generic grid exactly as shown
+  const table = readGrid();
+  if(table.rows.length === 0){ toast("Add at least one row to the table","err"); return; }
 
   // resolve the file to attach
   let fileId = null;
@@ -1017,10 +1053,8 @@ $("#saveBtn").addEventListener("click", async ()=>{
     month, year, currency:"AED",
     roomType: $("#fRoomType").value.trim(),
     promo: $("#fPromo").value.trim(),
-    rates,          // array of {period, bb, ro, nrf, release, allotment}
-    plainText,      // raw text version (used when displayMode === "text")
-    displayMode: entryMode,   // "table" or "text"
-    schema: 3,      // multi-column format incl. release period + per-row allotment
+    table,          // { headers:[], rows:[[]] } — the table exactly as in the file
+    schema: 4,      // generic table schema
     notes: $("#fNotes").value.trim(),
     fileId,
     fileName: pendingFile ? pendingFile.name : (existing ? existing.fileName : null),
@@ -1090,7 +1124,14 @@ function recordBlock(r){
   const aed = v => (v===null||v===undefined||v==="") ? "—" : (/%|\bTD\b|[a-zA-Z]/.test(String(v)) ? esc(v) : "AED "+fmtAED(v));
   let rateTable;
 
-  if(r.displayMode === "text" && r.plainText){
+  if(r.schema === 4 && r.table && Array.isArray(r.table.headers)){
+    // GENERIC table — show exactly the columns & rows captured from the file
+    const heads = r.table.headers.map(h=> `<th>${esc(h)}</th>`).join("");
+    const body = (r.table.rows||[]).map(row=>
+      `<tr>${r.table.headers.map((_,c)=> `<td>${esc(row[c]||"")}</td>`).join("")}</tr>`
+    ).join("");
+    rateTable = `<div style="overflow-x:auto"><table><thead><tr>${heads}</tr></thead><tbody>${body}</tbody></table></div>`;
+  } else if(r.displayMode === "text" && r.plainText){
     // SIMPLE TEXT mode — show the rates exactly as stored, no columns
     rateTable = `<pre style="white-space:pre-wrap; font-family:inherit; font-size:14px; margin:0; background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:12px; line-height:1.6">${esc(r.plainText)}</pre>`;
   } else if((r.schema === 2 || r.schema === 3) && Array.isArray(r.rates)){
@@ -1207,51 +1248,54 @@ async function editRecord(id){
     const f = await getOne("files", r.fileId);
     if(f){ pendingFile = {name:f.name, type:f.type}; pendingDataURL = f.dataURL; }
   }
-  // rows
-  $("#rateBody").innerHTML = "";
-  const isLegacy = !((r.schema===2 || r.schema===3) && Array.isArray(r.rates));
-  const rows = isLegacy
-             ? (r.rates||[]).map(x=>({period:x.desc||"", bb:"", ro:"", nrf: x.rate==null?"":String(x.rate), release:"", allotment:""}))
-             : r.rates;
-  if(rows.length) rows.forEach(x=> addRateRow(x)); else addRateRow();
-  // restore the display mode + simple text
-  $("#fPlainText").value = r.plainText || "";
-  setMode(r.displayMode === "text" ? "text" : "table");
+  // Build the grid from whatever the record stored
+  const grid = recordToGrid(r);
+  renderGrid(grid.headers, grid.rows.length ? grid.rows : [grid.headers.map(()=> "")]);
+
   // mark that we're editing so Save replaces instead of adding a new one
   editingId = id;
   $("#reviewCard").style.display = "block";
   renderReferencePane();
-  // show the re-read button when there's an image to re-scan (great for fixing old records)
   $("#rereadBtn").style.display = (pendingDataURL && (pendingFile.type||"").indexOf("pdf")===-1) ? "" : "none";
   $("#saveBtn").textContent = "💾 Update this record";
   $("#reviewCard").scrollIntoView({behavior:"smooth"});
-  if(isLegacy && pendingDataURL && (pendingFile.type||"").indexOf("pdf")===-1){
-    // auto-upgrade: re-scan the screenshot so it comes back as BB/RO/NRF
-    toast("Old-format record — re-reading the screenshot for you…","ok");
-    await rereadFromScreenshot();
-  } else {
-    toast("Editing — make your changes and click Update");
-  }
+  toast("Editing — change any cell, then click Update");
 }
 
-/* Re-run OCR on the currently attached screenshot and rebuild the rate rows
-   in the new BB/RO/NRF format. Used to upgrade old records or re-scan. */
+/* Convert any stored record (old or new schema) into a generic {headers, rows} grid. */
+function recordToGrid(r){
+  if(r.schema === 4 && r.table && Array.isArray(r.table.headers)){
+    return { headers: r.table.headers.slice(), rows: (r.table.rows||[]).map(x=>x.slice()) };
+  }
+  if((r.schema===2 || r.schema===3) && Array.isArray(r.rates)){
+    const headers = ["Month","Bed & Breakfast (BB)","Room Only (RO)","Non-Refundable (NRF)","Release Period","Allotment"];
+    const rows = r.rates.map(x=> [x.period||"", x.bb||"", x.ro||"", x.nrf||"", x.release||"", x.allotment||""]);
+    return { headers, rows };
+  }
+  // legacy {desc, rate}
+  const headers = ["Item","Rate"];
+  const rows = (r.rates||[]).map(x=> [x.desc||"", x.rate==null?"":String(x.rate)]);
+  return { headers, rows: rows.length?rows:[["",""]] };
+}
+
+/* Re-run the reader on the attached file and rebuild the grid as-is. */
 async function rereadFromScreenshot(){
-  if(!pendingDataURL){ toast("No screenshot attached to re-read","err"); return; }
-  setProgress(true, 5, "Re-reading screenshot…");
+  if(!pendingDataURL){ toast("No file attached to re-read","err"); return; }
+  setProgress(true, 5, "Re-reading file…");
   try{
-    const text = await ocrImage(pendingDataURL);
+    const text = (pendingFile.type||"").indexOf("pdf")!==-1 ? await ocrPDF(pendingDataURL) : await ocrImage(pendingDataURL);
     setProgress(false);
-    const parsed = parseRates(text);
-    if(parsed.roomType) $("#fRoomType").value = parsed.roomType;
-    if(parsed.promo) $("#fPromo").value = parsed.promo;
+    const table = parseGenericTable(text);
     $("#rawText").textContent = text || "(no text detected)";
-    $("#rateBody").innerHTML = "";
-    if(parsed.rows.length) parsed.rows.forEach(x=> addRateRow(x)); else addRateRow();
-    toast(`Re-read done — found ${parsed.rows.length} row(s). Check NRF & click Update.`,"ok");
+    if(table.headers.length){
+      renderGrid(table.headers, table.rows.length ? table.rows : [table.headers.map(()=> "")]);
+      toast(`Re-read done — found ${table.rows.length} row(s). Check & Update.`,"ok");
+    } else {
+      toast("Couldn't detect a table — edit the grid manually","err");
+    }
   }catch(err){
     console.error(err); setProgress(false);
-    toast("Couldn't re-read the image — type the values manually","err");
+    toast("Couldn't re-read the file — edit the grid manually","err");
   }
 }
 
@@ -1343,16 +1387,13 @@ $("#diagBtn").addEventListener("click", async ()=>{
   const out = $("#diagOut");
   if(all.length===0){ out.style.display="block"; out.textContent="(no records stored)"; return; }
   const lines = all.map((r,i)=>{
-    const isNew = (r.schema===2 || r.schema===3) && Array.isArray(r.rates);
-    let rateStr;
-    if(isNew){
-      rateStr = r.rates.map(x=>`      • ${x.period} | BB="${x.bb}" | RO="${x.ro}" | NRF="${x.nrf}" | Release="${x.release||""}" | Allot="${x.allotment||""}"`).join("\n");
-    } else {
-      rateStr = (r.rates||[]).map(x=>`      • desc="${x.desc}" | rate="${x.rate}"  (OLD FORMAT)`).join("\n");
-    }
-    return `#${i+1}  ${r.company} · ${r.month} ${r.year||""}\n`
-      + `    format: ${isNew?"NEW (BB/RO/NRF) ✔":"OLD ✗ — needs Convert"}\n`
-      + `    roomType="${r.roomType||""}" promo="${r.promo||""}" allotment="${r.allotment||""}"\n`
+    const g = recordToGrid(r);
+    const isNew = r.schema === 4;
+    const rateStr = "      " + g.headers.join(" | ") + "\n"
+      + g.rows.map(row=>`      • ${row.join(" | ")}`).join("\n");
+    return `#${i+1}  ${r.company} · ${[r.month,r.year].filter(Boolean).join(" ")}\n`
+      + `    format: ${isNew?"table ✔":"old ✗ — click Convert"}\n`
+      + `    roomType="${r.roomType||""}" promo="${r.promo||""}"\n`
       + rateStr;
   });
   out.style.display="block";
@@ -1365,48 +1406,19 @@ $("#diagBtn").addEventListener("click", async ()=>{
    parse of the old descriptions so at least the structure is upgraded. */
 $("#fixAllBtn").addEventListener("click", async ()=>{
   const all = await getAll("rates");
-  const legacy = all.filter(r=> !((r.schema===2 || r.schema===3) && Array.isArray(r.rates)));
-  if(legacy.length===0){ toast("All records are already in BB/RO/NRF format ✔","ok"); return; }
-  if(!confirm(`Convert ${legacy.length} old record(s) to the BB/RO/NRF format? Records with a screenshot will be re-read automatically.`)) return;
+  const legacy = all.filter(r=> r.schema !== 4);
+  if(legacy.length===0){ toast("All records already use the table format ✔","ok"); return; }
+  if(!confirm(`Convert ${legacy.length} old record(s) to the new table format? Their existing values are kept.`)) return;
 
   let done=0;
   for(const r of legacy){
-    let rebuilt = null;
-    // 1) prefer re-reading the attached image
-    if(r.fileId){
-      const f = await getOne("files", r.fileId);
-      if(f && (f.type||"").indexOf("pdf")===-1){
-        try{
-          setProgress(true, 10, `Re-reading ${r.company}…`);
-          const text = await ocrImage(f.dataURL);
-          const parsed = parseRates(text);
-          if(parsed.rows.length){
-            rebuilt = {
-              roomType: parsed.roomType || r.roomType || "Deluxe Room",
-              promo: parsed.promo || r.promo || "",
-              allotment: parsed.allotment || r.allotment || "",
-              rates: parsed.rows
-            };
-          }
-        }catch(e){ console.error(e); }
-      }
-    }
-    // 2) fallback: map old {desc,rate} into a single period row
-    if(!rebuilt){
-      const first = (r.rates||[])[0] || {};
-      rebuilt = {
-        roomType: r.roomType || "Deluxe Room",
-        promo: r.promo || "",
-        allotment: r.allotment || "",
-        rates: [{ period: `${r.month} ${r.year||""}`.trim(), bb:"", ro:"", nrf:"", note:"(please fill BB/RO/NRF manually)" }]
-      };
-    }
-    const upgraded = { ...r, schema:2, ...rebuilt, updatedAt:Date.now() };
+    const grid = recordToGrid(r);
+    const upgraded = { ...r, schema:4, table:grid, updatedAt:Date.now() };
+    delete upgraded.rates; delete upgraded.plainText; delete upgraded.displayMode;
     await put("rates", upgraded);
     done++;
   }
-  setProgress(false);
-  toast(`Converted ${done} record(s). Please open each and verify NRF.`,"ok");
+  toast(`Converted ${done} record(s) to the table format.`,"ok");
   refreshStats(); renderAll(); renderSearch($("#searchInput").value);
   $("#diagBtn").click();
 });
