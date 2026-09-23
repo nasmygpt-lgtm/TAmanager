@@ -669,13 +669,18 @@ let lastPdfGrid = null;
    positions shared across rows. This reads ANY table layout, because it uses
    the visual geometry of the page — not assumptions about the content. */
 function gridFromItems(items){
-  const toks = items.map(it=>({
-    str:(it.str||"").trim(),
-    x: it.transform ? it.transform[4] : 0,
-    y: it.transform ? it.transform[5] : 0,
-    w: it.width || 0,
-    h: Math.abs(it.transform ? it.transform[3] : 10)
-  })).filter(t=> t.str);
+  const toks = items.map(it=>{
+    const h = Math.abs(it.transform ? it.transform[3] : 10) || 10;
+    // PDF.js width is sometimes 0/unreliable — estimate from text length & font size
+    let w = it.width || 0;
+    if(!w || w < 1) w = (it.str||"").length * h * 0.5;
+    return {
+      str:(it.str||"").trim(),
+      x: it.transform ? it.transform[4] : 0,
+      y: it.transform ? it.transform[5] : 0,
+      w, h
+    };
+  }).filter(t=> t.str);
   if(toks.length < 2) return null;
 
   const medianH = [...toks.map(t=>t.h)].sort((a,b)=>a-b)[Math.floor(toks.length/2)] || 10;
@@ -1075,27 +1080,46 @@ function openReview(text){
   // Build the best table we can, in priority order:
   //   1) spatial grid from PDF coordinates (most accurate for any layout)
   //   2) generic text-based table reader (screenshots / OCR / paste)
+  //   3) raw spatial grid rows shown as-is (last resort, so nothing is lost)
   let headers = [], rows = [], title = "";
-  if(lastPdfGrid && lastPdfGrid.rows.length >= 2){
+
+  if(lastPdfGrid && lastPdfGrid.rows.length){
     const g = gridToHeadersRows(lastPdfGrid.rows);
     headers = g.headers; rows = g.rows; title = g.title || "";
   }
   if(rows.length === 0){
     const table = parseGenericTable(text);
-    headers = table.headers; rows = table.rows; title = table.title;
+    if(table.headers.length && table.rows.length){
+      headers = table.headers; rows = table.rows; title = table.title;
+    }
   }
+  // last resort: show the raw spatial grid rows directly (first row = headers)
+  if(rows.length === 0 && lastPdfGrid && lastPdfGrid.rows.length){
+    const raw = lastPdfGrid.rows;
+    headers = raw[0].map((c,i)=> c.trim() || ("Column "+(i+1)));
+    rows = raw.slice(1);
+  }
+
+  // build a diagnostic so we can always see what was read
+  const diag = "TEXT EXTRACTED:\n" + (text||"(none)")
+    + "\n\n--- SPATIAL GRID ROWS ---\n"
+    + (lastPdfGrid ? lastPdfGrid.rows.map(r=> r.join("  |  ")).join("\n") : "(no PDF grid — image/paste)");
+  $("#rawText").textContent = diag;
 
   // Auto-fill room type / promo from a detected title
   if(title && !$("#fRoomType").value) $("#fRoomType").value = title.replace(/\s*rates?$/i,"").trim() || title;
   const pr = text.match(/promo\s*[:\-]?\s*(.+)/i);
   if(pr && !$("#fPromo").value) $("#fPromo").value = pr[1].replace(/\|.*$/,"").trim();
 
-  if(headers.length){
-    renderGrid(headers, rows.length ? rows : [headers.map(()=> "")]);
+  if(headers.length && rows.length){
+    renderGrid(headers, rows);
     toast(`Found a table with ${rows.length} row(s) — please check`,"ok");
   } else {
     renderGrid(["Column 1","Column 2","Column 3"], [["","",""]]);
-    toast("Couldn't read a table — you can type it in","err");
+    // auto-open the diagnostic so the user can see the raw extraction
+    $("#rawText").style.display = "block";
+    $("#rawTextToggle").textContent = "▾ Hide raw text the reader extracted";
+    toast("Couldn't auto-read the table — see the extracted text below","err");
   }
 
   refreshCompanyList();
