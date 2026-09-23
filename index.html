@@ -272,8 +272,8 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
 
       <div class="grid cols-3" style="margin-bottom:16px">
         <div>
-          <label>Room type <span class="muted" style="font-weight:400">(optional)</span></label>
-          <input id="fRoomType" placeholder="e.g. Deluxe Room" autocomplete="off" />
+          <label>Room type</label>
+          <input id="fRoomType" value="Deluxe Room" placeholder="e.g. Deluxe Room" autocomplete="off" />
         </div>
         <div>
           <label>Promo <span class="muted" style="font-weight:400">(optional)</span></label>
@@ -727,7 +727,7 @@ function resetAddForm(){
   $("#reviewCard").style.display="none";
   $("#previewImg").style.display="none";
   $("#fCompany").value=""; $("#fMonth").value=""; $("#fNotes").value="";
-  $("#fRoomType").value=""; $("#fPromo").value=""; $("#fAllotment").value="";
+  $("#fRoomType").value="Deluxe Room"; $("#fPromo").value=""; $("#fAllotment").value="";
   $("#rateBody").innerHTML="";
   $("#pasteBox").value="";
   pendingFile=null; pendingDataURL=null;
