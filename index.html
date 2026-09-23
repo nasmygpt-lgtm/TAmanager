@@ -509,6 +509,7 @@ $("#pasteReadBtn").addEventListener("click", ()=>{
   // Pasting text always starts a BRAND-NEW entry — clear any edit state first
   // (resetAddForm clears the paste box, so we captured `text` above already).
   resetAddForm();
+  lastPdfGrid = null;
   // pasted text has no attached file
   pendingFile = null; pendingDataURL = null;
   const m = detectMonth(text);
@@ -537,6 +538,7 @@ async function handleFile(file){
   // Uploading a file always starts a BRAND-NEW entry — clear any edit state
   // so we never accidentally overwrite the record you were editing.
   resetAddForm();
+  lastPdfGrid = null;  // clear any previous PDF grid capture
 
   pendingFile = { name:file.name, type:file.type || (isPDF?"application/pdf":"image/*") };
 
@@ -625,16 +627,20 @@ async function ocrPDF(dataURL){
 
   const pdf = await pdfjsLib.getDocument({data:arr}).promise;
   let fullText = "";
+  lastPdfGrid = null; // reset the structured-table capture
 
   for(let p=1; p<=pdf.numPages; p++){
     const page = await pdf.getPage(p);
 
     // 1) try to grab embedded text (fast + accurate for digital PDFs).
-    //    Reconstruct line breaks from item Y-positions so table rows stay
-    //    on separate lines (PDF.js otherwise returns items with no newlines).
     const tc = await page.getTextContent();
     const embedded = itemsToText(tc.items);
     if(embedded.replace(/\s/g,"").length > 20){
+      // ALSO build a real grid from the item X/Y positions (best accuracy)
+      if(!lastPdfGrid){
+        const g = gridFromItems(tc.items);
+        if(g && g.rows.length) lastPdfGrid = g;
+      }
       fullText += embedded + "\n";
       setProgress(true, 10 + Math.round((p/pdf.numPages)*80), `Read page ${p}/${pdf.numPages}`);
       continue;
@@ -651,6 +657,96 @@ async function ocrPDF(dataURL){
     fullText += data.text + "\n";
   }
   return fullText;
+}
+
+/* Holds the most recent grid extracted directly from PDF item coordinates.
+   This is the most reliable table capture — used before falling back to text. */
+let lastPdfGrid = null;
+
+/* ---------- SPATIAL table extractor ----------
+   Build a real grid {rows:[[cell,...]]} from PDF.js text items using their
+   X/Y coordinates. Rows come from Y-clustering; columns come from the X
+   positions shared across rows. This reads ANY table layout, because it uses
+   the visual geometry of the page — not assumptions about the content. */
+function gridFromItems(items){
+  const toks = items.map(it=>({
+    str:(it.str||"").trim(),
+    x: it.transform ? it.transform[4] : 0,
+    y: it.transform ? it.transform[5] : 0,
+    w: it.width || 0,
+    h: Math.abs(it.transform ? it.transform[3] : 10)
+  })).filter(t=> t.str);
+  if(toks.length < 2) return null;
+
+  const medianH = [...toks.map(t=>t.h)].sort((a,b)=>a-b)[Math.floor(toks.length/2)] || 10;
+  const yTol = Math.max(4, medianH*0.6);
+
+  // 1) cluster tokens into rows by Y (running-average anchor)
+  const rowsY = [];
+  toks.sort((a,b)=> b.y - a.y || a.x - b.x);
+  for(const t of toks){
+    let row = rowsY.find(r=> Math.abs(r.y - t.y) <= yTol);
+    if(!row){ row = {y:t.y, n:0, toks:[]}; rowsY.push(row); }
+    row.toks.push(t);
+    row.y = (row.y*row.n + t.y)/(row.n+1); row.n++;
+  }
+  rowsY.sort((a,b)=> b.y - a.y);
+  rowsY.forEach(r=> r.toks.sort((a,b)=> a.x - b.x));
+
+  // 2) find column start positions by clustering the X of the first token in
+  //    each cell across all rows. We detect gaps between tokens to split cells.
+  const colStarts = [];
+  const xTolFactor = 2.2; // multiples of median char width considered a new cell
+  const medianCharW = (() => {
+    const ws = toks.map(t=> t.w/Math.max(1,t.str.length)).filter(Boolean).sort((a,b)=>a-b);
+    return ws[Math.floor(ws.length/2)] || 3;
+  })();
+  const cellGap = medianCharW * 4; // a gap wider than ~4 chars starts a new cell
+
+  // group each row's tokens into cells by X gaps, record each cell's start X
+  const rowCells = rowsY.map(r=>{
+    const cells = [];
+    let cur = null;
+    for(const t of r.toks){
+      if(cur && (t.x - (cur.x + cur.w)) <= cellGap){
+        cur.str += " " + t.str; cur.w = (t.x + t.w) - cur.x;
+      } else {
+        cur = {x:t.x, w:t.w, str:t.str}; cells.push(cur);
+      }
+    }
+    return cells;
+  });
+
+  // collect all cell start-Xs and cluster them into column anchors
+  const allX = [];
+  rowCells.forEach(cells=> cells.forEach(c=> allX.push(c.x)));
+  allX.sort((a,b)=>a-b);
+  const colTol = medianCharW * 6;
+  for(const x of allX){
+    if(!colStarts.length || x - colStarts[colStarts.length-1] > colTol) colStarts.push(x);
+  }
+  if(colStarts.length < 2) return null; // not a real table
+
+  // 3) place each row's cells into the nearest column
+  const assign = x => {
+    let best=0, bd=Infinity;
+    colStarts.forEach((cx,i)=>{ const d=Math.abs(cx-x); if(d<bd){bd=d;best=i;} });
+    return best;
+  };
+  const grid = rowCells.map(cells=>{
+    const arr = new Array(colStarts.length).fill("");
+    cells.forEach(c=>{
+      const ci = assign(c.x);
+      arr[ci] = arr[ci] ? (arr[ci] + " " + c.str) : c.str;
+    });
+    return arr;
+  });
+
+  // 4) keep only rows that have content in 2+ columns (drops stray lines)
+  const rows = grid.filter(r=> r.filter(c=> c.trim()).length >= 2);
+  if(rows.length < 2) return null;   // need a header + at least one data row
+
+  return { rows };
 }
 
 /* ---------- Parse extracted text into structured hotel rates ----------
@@ -976,23 +1072,87 @@ function openReview(text){
 
   if(!$("#fYear").value) $("#fYear").value = new Date().getFullYear();
 
-  // Read WHATEVER table is in the file — headers + rows, as-is.
-  const table = parseGenericTable(text);
-  // Auto-fill room type / promo from the detected title if we can
-  if(table.title && !$("#fRoomType").value) $("#fRoomType").value = table.title.replace(/\s*rates?$/i,"").trim() || table.title;
+  // Build the best table we can, in priority order:
+  //   1) spatial grid from PDF coordinates (most accurate for any layout)
+  //   2) generic text-based table reader (screenshots / OCR / paste)
+  let headers = [], rows = [], title = "";
+  if(lastPdfGrid && lastPdfGrid.rows.length >= 2){
+    const g = gridToHeadersRows(lastPdfGrid.rows);
+    headers = g.headers; rows = g.rows; title = g.title || "";
+  }
+  if(rows.length === 0){
+    const table = parseGenericTable(text);
+    headers = table.headers; rows = table.rows; title = table.title;
+  }
+
+  // Auto-fill room type / promo from a detected title
+  if(title && !$("#fRoomType").value) $("#fRoomType").value = title.replace(/\s*rates?$/i,"").trim() || title;
   const pr = text.match(/promo\s*[:\-]?\s*(.+)/i);
   if(pr && !$("#fPromo").value) $("#fPromo").value = pr[1].replace(/\|.*$/,"").trim();
 
-  if(table.headers.length){
-    renderGrid(table.headers, table.rows.length ? table.rows : [table.headers.map(()=> "")]);
-    toast(`Found a table with ${table.rows.length} row(s) — please check`,"ok");
+  if(headers.length){
+    renderGrid(headers, rows.length ? rows : [headers.map(()=> "")]);
+    toast(`Found a table with ${rows.length} row(s) — please check`,"ok");
   } else {
-    // nothing detected — start an empty 3-column grid the user can fill
-    renderGrid(["Rate Type","Bed & Breakfast (BB)","Room Only (RO)"], [["",""]]);
+    renderGrid(["Column 1","Column 2","Column 3"], [["","",""]]);
+    toast("Couldn't read a table — you can type it in","err");
   }
 
   refreshCompanyList();
   $("#reviewCard").scrollIntoView({behavior:"smooth"});
+}
+
+/* Turn a raw spatial grid (array of row-arrays) into {title, headers, rows}.
+   The first row that has NO numbers is treated as the header; a short line
+   above it (single non-empty cell) becomes the title. */
+function gridToHeadersRows(rawRows){
+  let rows = rawRows.map(r=> r.slice());
+  let title = "";
+  // strip leading title rows (single non-empty cell, no digits)
+  while(rows.length){
+    const nonEmpty = rows[0].filter(c=> c.trim());
+    if(nonEmpty.length === 1 && !/\d/.test(nonEmpty[0])){ title = nonEmpty[0]; rows.shift(); }
+    else break;
+  }
+  if(!rows.length) return {title, headers:[], rows:[]};
+
+  // header = leading rows without digits (may be wrapped over 2 lines)
+  let headers = [];
+  while(rows.length && !/\d/.test(rows[0].join("")) && rows[0].filter(c=>c.trim()).length >= 2){
+    const hl = rows.shift();
+    headers = headers.length ? headers.map((h,i)=> hl[i] ? (h+" "+hl[i]).trim() : h) : hl.map(h=>h.trim());
+  }
+  if(!headers.length) headers = rows[0].map((_,i)=> "Column "+(i+1));
+
+  // The DATA rows are the ones aligned to the header. The main table is the
+  // first consecutive block of rows that fill the SAME columns as row 1.
+  // As soon as a row fills a very different set of columns (the footer/next
+  // section), we stop.
+  const colUsed = arr => arr.map(c=> c.trim() ? 1 : 0);
+  const dataRows = [];
+  let pattern = null;
+  for(const r of rows){
+    const used = colUsed(r);
+    const fillCount = used.reduce((a,b)=>a+b,0);
+    if(fillCount < 2) continue;                 // skip near-empty lines
+    if(!pattern){ pattern = used; dataRows.push(r); continue; }
+    // similarity: how many columns match the established pattern
+    const match = used.reduce((a,b,i)=> a + (b===pattern[i]?1:0), 0) / used.length;
+    if(match >= 0.6) dataRows.push(r);          // same shape → part of the table
+    else break;                                  // layout changed → footer/next section
+  }
+
+  // Drop columns that are empty across the header AND all data rows
+  const width = headers.length;
+  const keep = [];
+  for(let c=0;c<width;c++){
+    const anyHeader = (headers[c]||"").trim();
+    const anyData = dataRows.some(r=> (r[c]||"").trim());
+    if(anyHeader || anyData) keep.push(c);
+  }
+  headers = keep.map(c=> headers[c]||"");
+  const rowsOut = dataRows.map(r=> keep.map(c=> r[c]||""));
+  return { title, headers, rows: rowsOut };
 }
 
 /* ---- Dynamic grid: columns come from the file, everything editable ---- */
