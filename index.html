@@ -347,6 +347,7 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
 
       <div class="row-actions">
         <button class="btn ghost sm" id="addRowBtn">＋ Add period row</button>
+        <button class="btn primary sm" id="rereadBtn" style="display:none">🔄 Re-read from screenshot</button>
       </div>
       <p class="hint">Fill only the columns you have — leave the rest blank. <strong>BB</strong> = Bed &amp; Breakfast, <strong>RO</strong> = Room Only, <strong>NRF</strong> = Non-Refundable. You can type values like <code>265 + 15 TD</code> or <code>5%</code>.</p>
 
@@ -795,6 +796,7 @@ $("#cancelBtn").addEventListener("click", resetAddForm);
 function resetAddForm(){
   editingId = null;
   $("#saveBtn").textContent = "💾 Save these rates";
+  $("#rereadBtn").style.display = "none";
   $("#reviewCard").style.display="none";
   $("#refHolder").innerHTML="";
   $("#fCompany").value=""; $("#fMonth").value=""; $("#fNotes").value="";
@@ -1027,17 +1029,49 @@ async function editRecord(id){
   }
   // rows
   $("#rateBody").innerHTML = "";
-  const rows = (r.schema===2 && Array.isArray(r.rates)) ? r.rates
-             : (r.rates||[]).map(x=>({period:x.desc||"", bb:"", ro:"", nrf: x.rate==null?"":String(x.rate), note:""}));
+  const isLegacy = !(r.schema===2 && Array.isArray(r.rates));
+  const rows = isLegacy
+             ? (r.rates||[]).map(x=>({period:x.desc||"", bb:"", ro:"", nrf: x.rate==null?"":String(x.rate), note:""}))
+             : r.rates;
   if(rows.length) rows.forEach(x=> addRateRow(x)); else addRateRow();
   // mark that we're editing so Save replaces instead of adding a new one
   editingId = id;
   $("#reviewCard").style.display = "block";
   renderReferencePane();
+  // show the re-read button when there's an image to re-scan (great for fixing old records)
+  $("#rereadBtn").style.display = (pendingDataURL && (pendingFile.type||"").indexOf("pdf")===-1) ? "" : "none";
   $("#saveBtn").textContent = "💾 Update this record";
   $("#reviewCard").scrollIntoView({behavior:"smooth"});
-  toast("Editing — make your changes and click Update");
+  if(isLegacy && pendingDataURL){
+    toast("Old-format record — click 🔄 Re-read from screenshot to rebuild BB/RO/NRF","ok");
+  } else {
+    toast("Editing — make your changes and click Update");
+  }
 }
+
+/* Re-run OCR on the currently attached screenshot and rebuild the rate rows
+   in the new BB/RO/NRF format. Used to upgrade old records or re-scan. */
+$("#rereadBtn").addEventListener("click", async ()=>{
+  if(!pendingDataURL){ toast("No screenshot attached to re-read","err"); return; }
+  setProgress(true, 5, "Re-reading screenshot…");
+  try{
+    const text = await ocrImage(pendingDataURL);
+    setProgress(false);
+    const parsed = parseRates(text);
+    // fill header fields (only if empty, to avoid wiping your manual edits)
+    if(parsed.roomType) $("#fRoomType").value = parsed.roomType;
+    if(parsed.promo) $("#fPromo").value = parsed.promo;
+    if(parsed.allotment) $("#fAllotment").value = parsed.allotment;
+    $("#rawText").textContent = text || "(no text detected)";
+    // rebuild rows
+    $("#rateBody").innerHTML = "";
+    if(parsed.rows.length) parsed.rows.forEach(x=> addRateRow(x)); else addRateRow();
+    toast(`Re-read done — found ${parsed.rows.length} row(s). Check & Update.`,"ok");
+  }catch(err){
+    console.error(err); setProgress(false);
+    toast("Couldn't re-read the image","err");
+  }
+});
 
 /* ---------- File viewer ---------- */
 async function viewFile(fileId, name){
