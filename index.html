@@ -298,9 +298,9 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
           <datalist id="companyList"></datalist>
         </div>
         <div>
-          <label>Month</label>
+          <label>Month <span class="muted" style="font-weight:400">(optional — set per row below)</span></label>
           <select id="fMonth">
-            <option value="">Select…</option>
+            <option value="">All / multiple months</option>
             <option>January</option><option>February</option><option>March</option>
             <option>April</option><option>May</option><option>June</option>
             <option>July</option><option>August</option><option>September</option>
@@ -851,7 +851,7 @@ $("#saveBtn").addEventListener("click", async ()=>{
   const month = $("#fMonth").value;
   const year = $("#fYear").value.trim();
   if(!company){ toast("Please enter a company name","err"); $("#fCompany").focus(); return; }
-  if(!month){ toast("Please select a month","err"); return; }
+  // Month is optional — rate sheets often cover several months (captured per row).
 
   const rates = [];
   $("#rateBody").querySelectorAll("tr").forEach(tr=>{
@@ -893,7 +893,8 @@ $("#saveBtn").addEventListener("click", async ()=>{
     updatedAt: Date.now()
   };
   await put("rates", record);
-  toast((editingId? "Updated ✔  ":"Saved ✔  ")+company+" · "+month+" "+year, "ok");
+  const when = [month, year].filter(Boolean).join(" ");
+  toast((editingId? "Updated ✔  ":"Saved ✔  ")+company+(when? " · "+when : ""), "ok");
   resetAddForm();
   refreshStats();
   refreshCompanyList();
@@ -995,8 +996,8 @@ function recordBlock(r){
 
   return `<div style="border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:12px">
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px">
-      <span class="chip month">${esc(r.month)}</span>
-      <span class="chip year">${esc(r.year||"")}</span>
+      ${r.month? `<span class="chip month">${esc(r.month)}</span>` : ""}
+      ${r.year? `<span class="chip year">${esc(r.year)}</span>` : ""}
       <span class="chip">AED</span>
       <span style="flex:1"></span>
       ${fileBtn}
