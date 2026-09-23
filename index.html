@@ -313,7 +313,7 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
         </div>
       </div>
 
-      <div class="grid cols-3" style="margin-bottom:16px">
+      <div class="grid cols-2" style="margin-bottom:16px">
         <div>
           <label>Room type</label>
           <input id="fRoomType" value="Deluxe Room" placeholder="e.g. Deluxe Room" autocomplete="off" />
@@ -322,22 +322,19 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
           <label>Promo <span class="muted" style="font-weight:400">(optional)</span></label>
           <input id="fPromo" placeholder="e.g. 3 Nights & Above (5% off)" autocomplete="off" />
         </div>
-        <div>
-          <label>Allotment <span class="muted" style="font-weight:400">(optional)</span></label>
-          <input id="fAllotment" placeholder="e.g. 5 Rooms" autocomplete="off" />
-        </div>
       </div>
 
-      <label>Rates by period</label>
+      <label>Rates by month</label>
       <div style="overflow-x:auto">
       <table id="rateTable">
         <thead>
           <tr>
-            <th style="min-width:150px">Month / Period</th>
-            <th style="min-width:130px">Bed &amp; Breakfast (BB)</th>
-            <th style="min-width:130px">Room Only (RO)</th>
-            <th style="min-width:120px">Non-Refundable (NRF)</th>
-            <th style="min-width:120px">Notes</th>
+            <th style="min-width:130px">Month</th>
+            <th style="min-width:110px">Bed &amp; Breakfast (BB)</th>
+            <th style="min-width:110px">Room Only (RO)</th>
+            <th style="min-width:110px">Non-Refundable (NRF)</th>
+            <th style="min-width:100px">Release Period</th>
+            <th style="min-width:90px">Allotment</th>
             <th></th>
           </tr>
         </thead>
@@ -349,7 +346,7 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
         <button class="btn ghost sm" id="addRowBtn">＋ Add period row</button>
         <button class="btn primary sm" id="rereadBtn" style="display:none">🔄 Re-read from screenshot</button>
       </div>
-      <p class="hint">Fill only the columns you have — leave the rest blank. <strong>BB</strong> = Bed &amp; Breakfast, <strong>RO</strong> = Room Only, <strong>NRF</strong> = Non-Refundable. You can type values like <code>265 + 15 TD</code> or <code>5%</code>.</p>
+      <p class="hint">One row per month. Fill only the columns you have. <strong>BB</strong> = Bed &amp; Breakfast, <strong>RO</strong> = Room Only, <strong>NRF</strong> = Non-Refundable, plus <strong>Release Period</strong> &amp; <strong>Allotment</strong>. Values like <code>255</code>, <code>5%</code>, <code>2 Days</code>, <code>3 Rooms</code>.</p>
 
       <div>
         <label style="margin-top:16px">Notes (optional)</label>
@@ -678,66 +675,70 @@ function parseRates(text){
     }
   }
 
-  // Which column is BB / RO / NRF? Detect from a header line if present.
-  // Default order (as in the sample): BB, RO, NRF.
-  let order = ["bb","ro","nrf"];
-  const headerLine = rawLines.find(l=> /\b(bb|ro|nrf)\b/i.test(l) && /(bed|room only|non[- ]?refundable|breakfast)/i.test(l));
-  if(headerLine){
-    const found = [];
-    // record columns in the order the labels appear
-    [...headerLine.matchAll(/\b(bb|ro|nrf)\b/gi)].forEach(m=> found.push(m[1].toLowerCase()));
-    if(found.length) order = found;
-  }
-
   const monthMap = {jan:"January",feb:"February",mar:"March",apr:"April",may:"May",jun:"June",
                     jul:"July",aug:"August",sep:"September",oct:"October",nov:"November",dec:"December"};
   const monthRe = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\b/i;
-  // a rate cell: number with optional +supplement / TD / % / currency, e.g.
-  // "AED 265 + 15 TD", "240+15", "5%"
-  const cellRe = /(?:aed|dhs?)?\s*(\d[\d,]*(?:\.\d+)?\s*%|\d[\d,]*(?:\.\d+)?(?:\s*\+\s*\d[\d,]*(?:\.\d+)?)?(?:\s*[a-z]{1,3}\b)?)/gi;
 
-  // ---- data rows: any line that has a period/month AND at least one number ----
-  const isNoise = l => /^(promo|allot|deluxe|standard|superior|month\b|bed\b|room only|non[- ]?refundable|rates?$)/i.test(l)
-                     || /\b(rates?|room only|bed\s*&?\s*breakfast|non[- ]?refundable)\b/i.test(l) && !/\d/.test(l);
+  // Cell tokens, captured in reading order (left→right):
+  //  • price:      "AED 255", "265 + 15 TD", "240+15"
+  //  • percent:    "5%"
+  //  • release:    "2 Days" / "2 Day" / "3 Nights"
+  //  • allotment:  "3 Rooms" / "5 Room"
+  const priceRe   = /(?:aed|dhs?)\s*\d[\d,]*(?:\.\d+)?(?:\s*\+\s*\d[\d,]*(?:\.\d+)?(?:\s*[a-z]{1,3}\b)?)?|\d[\d,]*\s*\+\s*\d[\d,]*(?:\s*[a-z]{1,3}\b)?/i;
+  const pctRe     = /\d[\d.]*\s*%/;
+  const releaseRe = /\d+\s*(?:days?|nights?|hrs?|hours?)\b/i;
+  const allotRe   = /\d+\s*rooms?\b/i;
+  const bareNumRe = /\b\d[\d,]*(?:\.\d+)?\b/;
+
+  const clean = s => s.replace(/\baed\b|\bdhs?\b/gi,"").replace(/\s+/g," ").trim();
+
+  // ---- data rows ----
+  const isNoise = l => /^(promo\b|allotment\s*:|month\b|bed\b|room only|non[- ]?refundable)/i.test(l)
+                     || /\brates?\s*$/i.test(l)
+                     || (/\b(bed\s*&?\s*breakfast|room only|non[- ]?refundable|release period|allotment)\b/i.test(l) && !monthRe.test(l));
 
   for(const line of rawLines){
     if(isNoise(line)) continue;
+    if(!monthRe.test(line)) continue;      // every data row starts with a month
     if(!/\d/.test(line)) continue;
 
-    const hasMonth = monthRe.test(line);
-    const cells = [...line.matchAll(cellRe)].map(m=> m[0].replace(/\baed\b|\bdhs?\b/gi,"").replace(/\s+/g," ").trim());
-    // Need something that looks like a period label + at least one rate value
-    if(cells.length === 0) continue;
-
-    // Build the period label: prefer an explicit month/date range at the start.
-    let period = "";
+    // period = the month (+ year) at the start of the line
     const monthM = line.match(monthRe);
-    if(monthM){
-      // capture the month plus any following date-range digits (e.g. "October 2026" or "Oct 1-15")
-      const after = line.slice(monthM.index).match(/^([a-z]+\.?\s*\d{0,4}(?:\s*[-–]\s*\d{1,4})?)/i);
-      period = (after ? after[1] : monthM[0]).trim();
-      // normalise a bare 3-letter month to full name if it stands alone with a year
-      const mkey = monthM[1].toLowerCase();
-      if(monthMap[mkey] && /^[a-z]+\.?$/i.test(monthM[0].trim())) period = period.replace(monthM[0].trim(), monthMap[mkey]);
-    } else {
-      // no month: use the text before the first rate cell as the period label
-      const firstIdx = line.search(cellRe);
-      period = firstIdx > 0 ? line.slice(0, firstIdx).replace(/[:\-–|]+$/,"").trim() : "";
+    const mkey = monthM[1].toLowerCase();
+    const yearM = line.slice(monthM.index).match(/\b(20\d{2})\b/);
+    let period = (monthMap[mkey] || monthM[0]) + (yearM ? " " + yearM[1] : "");
+
+    // everything AFTER the month/year is the data portion
+    const dataStart = yearM ? line.indexOf(yearM[1]) + yearM[1].length : monthM.index + monthM[0].length;
+    let rest = line.slice(dataStart);
+
+    const row = { period, bb:"", ro:"", nrf:"", release:"", allotment:"" };
+
+    // pull out release period & allotment first (they're distinctive)
+    let m;
+    if((m = rest.match(releaseRe))){ row.release = clean(m[0]); rest = rest.replace(m[0], " "); }
+    if((m = rest.match(allotRe)))  { row.allotment = clean(m[0]); rest = rest.replace(m[0], " "); }
+    if((m = rest.match(pctRe)))    { row.nrf = clean(m[0]); rest = rest.replace(m[0], " "); }
+
+    // remaining price-like tokens, left→right, are BB then RO
+    const prices = [];
+    let guard = 0;
+    while((m = rest.match(priceRe)) && guard++ < 10){
+      prices.push(clean(m[0])); rest = rest.replace(m[0], " ");
     }
+    // if no explicit "AED"/"+" prices found, fall back to bare numbers
+    if(prices.length === 0){
+      let g2 = 0;
+      while((m = rest.match(bareNumRe)) && g2++ < 10){
+        const v = m[0]; rest = rest.replace(v, " ");
+        if(/^20\d{2}$/.test(v.replace(/[^\d]/g,""))) continue; // skip stray year
+        prices.push(v);
+      }
+    }
+    if(prices[0]) row.bb = prices[0];
+    if(prices[1]) row.ro = prices[1];
 
-    // Remove the year-only cell from rates if the period already captured it
-    // (avoid treating "2026" as a price). Filter cells that are exactly a 4-digit year.
-    const rateCells = cells.filter(c=> !/^\d{4}$/.test(c.replace(/[^\d]/g,"")) || parseInt(c) < 1990 || parseInt(c) > 2100);
-
-    const row = { period, bb:"", ro:"", nrf:"", note:"" };
-    // assign cells to columns by detected order
-    rateCells.forEach((c,i)=>{ const col = order[i] || "note"; row[col] = row[col] ? (row[col]+" / "+c) : c; });
-
-    // capture trailing bracket note
-    const noteM = line.match(/\(([^)]*)\)|\[([^\]]*)\]/);
-    if(noteM) row.note = (noteM[1]||noteM[2]||"").trim();
-
-    if(row.period || row.bb || row.ro || row.nrf) result.rows.push(row);
+    if(row.period || row.bb || row.ro || row.nrf || row.release || row.allotment) result.rows.push(row);
   }
 
   return result;
@@ -790,7 +791,6 @@ function openReview(text){
   // fill header fields if detected (don't overwrite what the user already typed)
   if(parsed.roomType && !$("#fRoomType").value) $("#fRoomType").value = parsed.roomType;
   if(parsed.promo && !$("#fPromo").value) $("#fPromo").value = parsed.promo;
-  if(parsed.allotment && !$("#fAllotment").value) $("#fAllotment").value = parsed.allotment;
 
   const rows = parsed.rows;
   const body = $("#rateBody");
@@ -810,14 +810,16 @@ function addRateRow(r={}){
   const bb = r.bb ?? "";
   const ro = r.ro ?? "";
   const nrf = r.nrf ?? "";
-  const note = r.note ?? "";
+  const release = r.release ?? "";
+  const allotment = r.allotment ?? "";
   const tr = document.createElement("tr");
   tr.innerHTML = `
-    <td><input class="rate-input period" value="${esc(period)}" placeholder="e.g. Oct 1-15" /></td>
-    <td><input class="rate-input bb" value="${esc(bb)}" placeholder="e.g. 265 + 15 TD" /></td>
-    <td><input class="rate-input ro" value="${esc(ro)}" placeholder="e.g. 240 + 15 TD" /></td>
+    <td><input class="rate-input period" value="${esc(period)}" placeholder="e.g. October 2026" /></td>
+    <td><input class="rate-input bb" value="${esc(bb)}" placeholder="e.g. 255" /></td>
+    <td><input class="rate-input ro" value="${esc(ro)}" placeholder="e.g. 230" /></td>
     <td><input class="rate-input nrf" value="${esc(nrf)}" placeholder="e.g. 5%" /></td>
-    <td><input class="rate-input note" value="${esc(note)}" placeholder="optional" /></td>
+    <td><input class="rate-input release" value="${esc(release)}" placeholder="e.g. 2 Days" /></td>
+    <td><input class="rate-input allotment" value="${esc(allotment)}" placeholder="e.g. 3 Rooms" /></td>
     <td><button class="btn danger sm rm">✕</button></td>`;
   tr.querySelector(".rm").addEventListener("click", ()=> tr.remove());
   $("#rateBody").appendChild(tr);
@@ -838,7 +840,7 @@ function resetAddForm(){
   $("#reviewCard").style.display="none";
   $("#refHolder").innerHTML="";
   $("#fCompany").value=""; $("#fMonth").value=""; $("#fNotes").value="";
-  $("#fRoomType").value="Deluxe Room"; $("#fPromo").value=""; $("#fAllotment").value="";
+  $("#fRoomType").value="Deluxe Room"; $("#fPromo").value="";
   $("#rateBody").innerHTML="";
   $("#pasteBox").value="";
   pendingFile=null; pendingDataURL=null;
@@ -859,8 +861,9 @@ $("#saveBtn").addEventListener("click", async ()=>{
     const bb = tr.querySelector(".bb").value.trim();
     const ro = tr.querySelector(".ro").value.trim();
     const nrf = tr.querySelector(".nrf").value.trim();
-    const note = tr.querySelector(".note").value.trim();
-    if(period || bb || ro || nrf || note) rates.push({period, bb, ro, nrf, note});
+    const release = tr.querySelector(".release").value.trim();
+    const allotment = tr.querySelector(".allotment").value.trim();
+    if(period || bb || ro || nrf || release || allotment) rates.push({period, bb, ro, nrf, release, allotment});
   });
   if(rates.length===0){ toast("Add at least one rate row","err"); return; }
 
@@ -883,9 +886,8 @@ $("#saveBtn").addEventListener("click", async ()=>{
     month, year, currency:"AED",
     roomType: $("#fRoomType").value.trim(),
     promo: $("#fPromo").value.trim(),
-    allotment: $("#fAllotment").value.trim(),
-    rates,          // array of {period, bb, ro, nrf, note}
-    schema: 2,      // marks the new multi-column format
+    rates,          // array of {period, bb, ro, nrf, release, allotment}
+    schema: 3,      // multi-column format incl. release period + per-row allotment
     notes: $("#fNotes").value.trim(),
     fileId,
     fileName: pendingFile ? pendingFile.name : (existing ? existing.fileName : null),
@@ -955,20 +957,24 @@ function recordBlock(r){
   const aed = v => (v===null||v===undefined||v==="") ? "—" : (/%|\bTD\b|[a-zA-Z]/.test(String(v)) ? esc(v) : "AED "+fmtAED(v));
   let rateTable;
 
-  if(r.schema === 2 && Array.isArray(r.rates)){
-    // new multi-column hotel format (BB / RO / NRF)
-    const hasNote = r.rates.some(x=> x.note);
+  if((r.schema === 2 || r.schema === 3) && Array.isArray(r.rates)){
+    // new multi-column hotel format (Month, BB, RO, NRF, Release Period, Allotment)
+    const hasRelease   = r.rates.some(x=> x.release);
+    const hasAllotment = r.rates.some(x=> x.allotment);
+    const hasNote      = r.rates.some(x=> x.note);
     const body = r.rates.map(x=>`
       <tr>
         <td><strong>${esc(x.period||"—")}</strong></td>
         <td>${x.bb?("AED "+esc(x.bb)) : "—"}</td>
         <td>${x.ro?("AED "+esc(x.ro)) : "—"}</td>
         <td class="nrf-cell">${x.nrf? esc(x.nrf) : '<span class="muted">—</span>'}</td>
-        ${hasNote? `<td>${esc(x.note||"")}</td>`:""}
+        ${hasRelease?   `<td>${x.release? esc(x.release) : "—"}</td>`   : ""}
+        ${hasAllotment? `<td>${x.allotment? esc(x.allotment) : "—"}</td>`: ""}
+        ${hasNote?      `<td>${esc(x.note||"")}</td>`                    : ""}
       </tr>`).join("");
     rateTable = `<div style="overflow-x:auto"><table>
       <thead><tr>
-        <th>Month / Period</th><th>Bed &amp; Breakfast (BB)</th><th>Room Only (RO)</th><th class="nrf-cell">Non-Refundable (NRF)</th>${hasNote?"<th>Notes</th>":""}
+        <th>Month</th><th>Bed &amp; Breakfast (BB)</th><th>Room Only (RO)</th><th class="nrf-cell">Non-Refundable (NRF)</th>${hasRelease?"<th>Release Period</th>":""}${hasAllotment?"<th>Allotment</th>":""}${hasNote?"<th>Notes</th>":""}
       </tr></thead><tbody>${body}</tbody></table></div>`;
   } else {
     // legacy format: {desc, rate}
@@ -1058,7 +1064,6 @@ async function editRecord(id){
   $("#fYear").value = r.year || "";
   $("#fRoomType").value = r.roomType || "Deluxe Room";
   $("#fPromo").value = r.promo || "";
-  $("#fAllotment").value = r.allotment || "";
   $("#fNotes").value = r.notes || "";
   // load the stored file into the reference pane if present
   pendingFile = null; pendingDataURL = null;
@@ -1068,9 +1073,9 @@ async function editRecord(id){
   }
   // rows
   $("#rateBody").innerHTML = "";
-  const isLegacy = !(r.schema===2 && Array.isArray(r.rates));
+  const isLegacy = !((r.schema===2 || r.schema===3) && Array.isArray(r.rates));
   const rows = isLegacy
-             ? (r.rates||[]).map(x=>({period:x.desc||"", bb:"", ro:"", nrf: x.rate==null?"":String(x.rate), note:""}))
+             ? (r.rates||[]).map(x=>({period:x.desc||"", bb:"", ro:"", nrf: x.rate==null?"":String(x.rate), release:"", allotment:""}))
              : r.rates;
   if(rows.length) rows.forEach(x=> addRateRow(x)); else addRateRow();
   // mark that we're editing so Save replaces instead of adding a new one
@@ -1101,7 +1106,6 @@ async function rereadFromScreenshot(){
     const parsed = parseRates(text);
     if(parsed.roomType) $("#fRoomType").value = parsed.roomType;
     if(parsed.promo) $("#fPromo").value = parsed.promo;
-    if(parsed.allotment) $("#fAllotment").value = parsed.allotment;
     $("#rawText").textContent = text || "(no text detected)";
     $("#rateBody").innerHTML = "";
     if(parsed.rows.length) parsed.rows.forEach(x=> addRateRow(x)); else addRateRow();
@@ -1200,10 +1204,10 @@ $("#diagBtn").addEventListener("click", async ()=>{
   const out = $("#diagOut");
   if(all.length===0){ out.style.display="block"; out.textContent="(no records stored)"; return; }
   const lines = all.map((r,i)=>{
-    const isNew = r.schema===2 && Array.isArray(r.rates);
+    const isNew = (r.schema===2 || r.schema===3) && Array.isArray(r.rates);
     let rateStr;
     if(isNew){
-      rateStr = r.rates.map(x=>`      • period="${x.period}" | BB="${x.bb}" | RO="${x.ro}" | NRF="${x.nrf}"`).join("\n");
+      rateStr = r.rates.map(x=>`      • ${x.period} | BB="${x.bb}" | RO="${x.ro}" | NRF="${x.nrf}" | Release="${x.release||""}" | Allot="${x.allotment||""}"`).join("\n");
     } else {
       rateStr = (r.rates||[]).map(x=>`      • desc="${x.desc}" | rate="${x.rate}"  (OLD FORMAT)`).join("\n");
     }
@@ -1222,7 +1226,7 @@ $("#diagBtn").addEventListener("click", async ()=>{
    parse of the old descriptions so at least the structure is upgraded. */
 $("#fixAllBtn").addEventListener("click", async ()=>{
   const all = await getAll("rates");
-  const legacy = all.filter(r=> !(r.schema===2 && Array.isArray(r.rates)));
+  const legacy = all.filter(r=> !((r.schema===2 || r.schema===3) && Array.isArray(r.rates)));
   if(legacy.length===0){ toast("All records are already in BB/RO/NRF format ✔","ok"); return; }
   if(!confirm(`Convert ${legacy.length} old record(s) to the BB/RO/NRF format? Records with a screenshot will be re-read automatically.`)) return;
 
