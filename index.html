@@ -528,6 +528,9 @@ fileInput.addEventListener("change", e=>{ if(e.target.files[0]) handleFile(e.tar
 $("#pasteReadBtn").addEventListener("click", ()=>{
   const text = $("#pasteBox").value.trim();
   if(!text){ toast("Paste some rate text first","err"); $("#pasteBox").focus(); return; }
+  // Pasting text always starts a BRAND-NEW entry — clear any edit state first
+  // (resetAddForm clears the paste box, so we captured `text` above already).
+  resetAddForm();
   // pasted text has no attached file
   pendingFile = null; pendingDataURL = null;
   const m = detectMonth(text);
@@ -552,6 +555,10 @@ async function handleFile(file){
   const isPDF = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
   const isImg = file.type.startsWith("image/");
   if(!isPDF && !isImg){ toast("Please choose an image or PDF","err"); return; }
+
+  // Uploading a file always starts a BRAND-NEW entry — clear any edit state
+  // so we never accidentally overwrite the record you were editing.
+  resetAddForm();
 
   pendingFile = { name:file.name, type:file.type || (isPDF?"application/pdf":"image/*") };
 
