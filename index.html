@@ -11,6 +11,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <!-- Supabase: cloud database + login so your data is safe on a server and synced across devices -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- jsPDF + autoTable: generate PDF reports of the rates -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script>
   if (window.pdfjsLib) {
     pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -250,6 +253,7 @@
     <button class="tab-btn active" data-tab="add">➕ Add Rates</button>
     <button class="tab-btn" data-tab="search">🔍 Search Company</button>
     <button class="tab-btn" data-tab="all">📋 All Records</button>
+    <button class="tab-btn" data-tab="export">📄 PDF / Email</button>
     <button class="tab-btn" data-tab="cloud">☁️ Cloud</button>
     <button class="tab-btn" data-tab="backup">💾 Backup</button>
   </div>
@@ -396,6 +400,34 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
       <h2>All records</h2>
       <p class="sub">Everything you've stored, newest first.</p>
       <div id="allRecords"></div>
+    </div>
+  </section>
+
+  <!-- EXPORT (PDF / EMAIL) PANEL -->
+  <section class="panel" id="panel-export">
+    <div class="card">
+      <h2>📄 Download or email rates as PDF</h2>
+      <p class="sub">Make a clean PDF of your rates — for all companies, or one you pick — then download it or send it by email.</p>
+
+      <div class="grid cols-2" style="margin-bottom:16px">
+        <div>
+          <label>Which company?</label>
+          <select id="pdfCompany">
+            <option value="__ALL__">All companies</option>
+          </select>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <div style="display:flex; gap:8px; flex-wrap:wrap">
+            <button class="btn primary" id="pdfDownloadBtn">⬇️ Download PDF</button>
+            <button class="btn ghost" id="pdfEmailBtn">✉️ Email PDF</button>
+          </div>
+        </div>
+      </div>
+      <p class="hint">
+        <strong>Download PDF</strong> saves the file to your device.<br>
+        <strong>Email PDF</strong> downloads the PDF and opens your email app with a ready message — just attach the downloaded file (browsers can't auto-attach files for security). On a phone you can also use the share button after download.
+      </p>
     </div>
   </section>
 
@@ -574,6 +606,7 @@ document.querySelectorAll(".tab-btn").forEach(b=>{
     if(b.dataset.tab==="all") renderAll();
     if(b.dataset.tab==="search") { renderSearch($("#searchInput").value); refreshCompanyList(); }
     if(b.dataset.tab==="cloud") refreshCloudUI();
+    if(b.dataset.tab==="export") fillPdfCompanies();
   });
 });
 
@@ -1793,6 +1826,122 @@ async function refreshCompanyList(){
   const names = [...new Set(all.map(r=>r.company))].sort();
   $("#companyList").innerHTML = names.map(n=>`<option value="${esc(n)}">`).join("");
 }
+
+/* ============================================================
+   PDF EXPORT / EMAIL
+   ============================================================ */
+async function fillPdfCompanies(){
+  const all = await getAll("rates");
+  const names = [...new Set(all.map(r=> r.company))].sort((a,b)=> a.localeCompare(b));
+  const sel = $("#pdfCompany");
+  const cur = sel.value;
+  sel.innerHTML = `<option value="__ALL__">All companies (${names.length})</option>`
+    + names.map(n=> `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  if(cur) sel.value = cur;
+}
+
+// Build a jsPDF document of the selected rates. Returns the jsPDF instance.
+async function buildRatesPDF(companyFilter){
+  if(!window.jspdf || !window.jspdf.jsPDF){ toast("PDF library not loaded (need internet once)","err"); return null; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:"pt", format:"a4" });
+  const pageW = doc.internal.pageSize.getWidth();
+  const marginX = 40;
+  let y = 48;
+
+  let all = (await getAll("rates")).sort((a,b)=>
+    a.company.localeCompare(b.company) || (b.createdAt||0)-(a.createdAt||0));
+  if(companyFilter && companyFilter !== "__ALL__"){
+    all = all.filter(r=> r.company === companyFilter);
+  }
+  if(all.length === 0){ toast("No rates to export","err"); return null; }
+
+  // Title
+  doc.setFont("helvetica","bold"); doc.setFontSize(18);
+  doc.text("Travel Rate Manager", marginX, y); y += 22;
+  doc.setFont("helvetica","normal"); doc.setFontSize(10); doc.setTextColor(100);
+  const scope = (companyFilter && companyFilter!=="__ALL__") ? companyFilter : "All companies";
+  doc.text(`Rates report — ${scope}  ·  ${new Date().toLocaleDateString()}  ·  Currency: AED`, marginX, y);
+  y += 18; doc.setTextColor(0);
+
+  // group by company
+  const byCompany = {};
+  all.forEach(r=> (byCompany[r.company] = byCompany[r.company]||[]).push(r));
+
+  for(const company of Object.keys(byCompany)){
+    if(y > doc.internal.pageSize.getHeight() - 120){ doc.addPage(); y = 48; }
+    doc.setFont("helvetica","bold"); doc.setFontSize(13);
+    doc.text("🏢 " + company, marginX, y); y += 6;
+
+    for(const r of byCompany[company]){
+      const meta = [
+        r.roomType ? "Room: "+r.roomType : "",
+        [r.month, r.year].filter(Boolean).join(" "),
+        r.promo ? "Promo: "+r.promo : ""
+      ].filter(Boolean).join("   |   ");
+      // grid -> autoTable
+      const g = recordToGrid(r);
+      doc.autoTable({
+        startY: y + 8,
+        head: [g.headers],
+        body: g.rows,
+        margin: { left: marginX, right: marginX },
+        styles: { fontSize: 9, cellPadding: 4 },
+        headStyles: { fillColor: [11,37,69], textColor: 255 },
+        alternateRowStyles: { fillColor: [245,248,252] },
+        didDrawPage: () => {},
+        willDrawCell: () => {},
+        beforePageBreak: () => {}
+      });
+      // caption above the table
+      if(meta){
+        doc.setFont("helvetica","italic"); doc.setFontSize(8); doc.setTextColor(90);
+        doc.text(meta, marginX, y + 4);
+        doc.setTextColor(0);
+      }
+      y = doc.lastAutoTable.finalY + 18;
+      if(r.notes){
+        doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(90);
+        doc.text("Notes: " + r.notes, marginX, y); doc.setTextColor(0); y += 14;
+      }
+    }
+    y += 6;
+  }
+
+  // page numbers
+  const pages = doc.internal.getNumberOfPages();
+  for(let p=1;p<=pages;p++){
+    doc.setPage(p); doc.setFontSize(8); doc.setTextColor(150);
+    doc.text(`Page ${p} of ${pages}`, pageW - marginX - 60, doc.internal.pageSize.getHeight() - 20);
+  }
+  return doc;
+}
+
+$("#pdfDownloadBtn").addEventListener("click", async ()=>{
+  const which = $("#pdfCompany").value;
+  const doc = await buildRatesPDF(which);
+  if(!doc) return;
+  const name = which==="__ALL__" ? "all-companies" : which.replace(/[^a-z0-9]+/gi,"-");
+  doc.save(`rates-${name}-${new Date().toISOString().slice(0,10)}.pdf`);
+  toast("PDF downloaded ✓","ok");
+});
+
+$("#pdfEmailBtn").addEventListener("click", async ()=>{
+  const which = $("#pdfCompany").value;
+  const doc = await buildRatesPDF(which);
+  if(!doc) return;
+  const scope = which==="__ALL__" ? "all companies" : which;
+  const name = which==="__ALL__" ? "all-companies" : which.replace(/[^a-z0-9]+/gi,"-");
+  // download the PDF first (browsers can't attach files to mailto for security)
+  doc.save(`rates-${name}-${new Date().toISOString().slice(0,10)}.pdf`);
+  // open email with a ready message
+  const subject = encodeURIComponent(`Travel rates — ${scope}`);
+  const body = encodeURIComponent(
+    `Hi,\n\nPlease find attached the travel rates for ${scope} (AED).\n\n`
+    + `(The PDF was just downloaded to your device — please attach it to this email.)\n\nThank you.`);
+  window.location.href = `mailto:?subject=${subject}&body=${body}`;
+  toast("PDF downloaded — attach it in the email that opened","ok");
+});
 
 /* ============================================================
    BACKUP / RESTORE
