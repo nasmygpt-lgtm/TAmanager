@@ -309,9 +309,14 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
 
       <div class="grid cols-3" style="margin-bottom:16px">
         <div>
-          <label>Company name</label>
-          <input id="fCompany" list="companyList" placeholder="e.g. Akbar Travel" autocomplete="off" />
+          <label>Company name(s) <span class="muted" style="font-weight:400">— add one or more</span></label>
+          <div style="display:flex; gap:6px">
+            <input id="fCompany" list="companyList" placeholder="e.g. Akbar Travel" autocomplete="off" style="flex:1" />
+            <button type="button" class="btn ghost sm" id="addCompanyBtn">＋ Add</button>
+          </div>
           <datalist id="companyList"></datalist>
+          <div id="companyChips" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px"></div>
+          <p class="hint" style="margin-top:4px">Type a name and press Enter (or ＋ Add) to include several companies. The same rates are saved for each.</p>
         </div>
         <div>
           <label>Month <span class="muted" style="font-weight:400">(optional — set per row below)</span></label>
@@ -1391,6 +1396,29 @@ function removeColumn(col){
   renderGrid(t.headers, t.rows.length?t.rows:[t.headers.map(()=> "")]);
 }
 
+/* ---- Multiple company names ---- */
+let companyList = [];   // companies to save this entry for
+function renderCompanyChips(){
+  const box = $("#companyChips");
+  box.innerHTML = companyList.map((c,i)=>
+    `<span class="chip" style="background:#e0f2fe;color:#0369a1">🏢 ${esc(c)} <span class="rm-company" data-i="${i}" style="cursor:pointer;font-weight:800;margin-left:4px">✕</span></span>`
+  ).join("");
+  box.querySelectorAll(".rm-company").forEach(el=>
+    el.addEventListener("click", ()=>{ companyList.splice(+el.dataset.i,1); renderCompanyChips(); }));
+}
+function addCompanyFromInput(){
+  const name = $("#fCompany").value.trim();
+  if(!name) return;
+  if(!companyList.some(c=> c.toLowerCase()===name.toLowerCase())) companyList.push(name);
+  $("#fCompany").value = "";
+  renderCompanyChips();
+  $("#fCompany").focus();
+}
+$("#addCompanyBtn").addEventListener("click", addCompanyFromInput);
+$("#fCompany").addEventListener("keydown", e=>{
+  if(e.key === "Enter"){ e.preventDefault(); addCompanyFromInput(); }
+});
+
 $("#addRowBtn").addEventListener("click", ()=>{
   const t = readGrid();
   t.rows.push(t.headers.map(()=> ""));
@@ -1428,30 +1456,35 @@ function resetAddForm(){
   $("#fRoomType").value="Deluxe Room"; $("#fPromo").value="";
   $("#gridHead").innerHTML=""; $("#gridBody").innerHTML="";
   $("#pasteBox").value="";
+  companyList = []; renderCompanyChips();
   pendingFile=null; pendingDataURL=null;
   fileInput.value="";
 }
 
 /* ---------- Save ---------- */
 $("#saveBtn").addEventListener("click", async ()=>{
-  const company = $("#fCompany").value.trim();
   const month = $("#fMonth").value;
   const year = $("#fYear").value.trim();
-  if(!company){ toast("Please enter a company name","err"); $("#fCompany").focus(); return; }
-  // Month is optional — rate sheets often cover several months (captured per row).
+
+  // Collect the companies to save for: the chips PLUS anything still typed.
+  let companies = companyList.slice();
+  const typed = $("#fCompany").value.trim();
+  if(typed && !companies.some(c=> c.toLowerCase()===typed.toLowerCase())) companies.push(typed);
+  // When editing an existing record, keep it single-company.
+  if(editingId) companies = companies.length ? [companies[0]] : [];
+  if(companies.length === 0){ toast("Please enter at least one company name","err"); $("#fCompany").focus(); return; }
 
   // Read the generic grid exactly as shown
   const table = readGrid();
   if(table.rows.length === 0){ toast("Add at least one row to the table","err"); return; }
 
-  // resolve the file to attach
+  // resolve the file to attach (shared across all companies)
   let fileId = null;
   let existing = null;
   if(editingId){
     existing = await getOne("rates", editingId);
-    fileId = existing ? existing.fileId : null;   // keep the already-stored file
+    fileId = existing ? existing.fileId : null;
   }
-  // if a NEW file was provided that isn't the stored one, save it
   if(pendingFile && pendingDataURL && !(existing && existing.fileId)){
     fileId = uid();
     const fileObj = { id:fileId, name:pendingFile.name, type:pendingFile.type, dataURL:pendingDataURL };
@@ -1459,24 +1492,30 @@ $("#saveBtn").addEventListener("click", async ()=>{
     cloudUpsertFile(fileObj);
   }
 
-  const record = {
-    id: editingId || uid(),
-    company, companyLower: company.toLowerCase(),
-    month, year, currency:"AED",
-    roomType: $("#fRoomType").value.trim(),
-    promo: $("#fPromo").value.trim(),
-    table,          // { headers:[], rows:[[]] } — the table exactly as in the file
-    schema: 4,      // generic table schema
-    notes: $("#fNotes").value.trim(),
-    fileId,
-    fileName: pendingFile ? pendingFile.name : (existing ? existing.fileName : null),
-    createdAt: existing ? existing.createdAt : Date.now(),
-    updatedAt: Date.now()
-  };
-  await put("rates", record);
-  cloudUpsertRate(record);
+  // Save one record per company (same rates/file for each)
+  for(let i=0;i<companies.length;i++){
+    const company = companies[i];
+    const record = {
+      id: editingId || uid(),
+      company, companyLower: company.toLowerCase(),
+      month, year, currency:"AED",
+      roomType: $("#fRoomType").value.trim(),
+      promo: $("#fPromo").value.trim(),
+      table,
+      schema: 4,
+      notes: $("#fNotes").value.trim(),
+      fileId,
+      fileName: pendingFile ? pendingFile.name : (existing ? existing.fileName : null),
+      createdAt: existing ? existing.createdAt : Date.now(),
+      updatedAt: Date.now()
+    };
+    await put("rates", record);
+    cloudUpsertRate(record);
+  }
+
   const when = [month, year].filter(Boolean).join(" ");
-  toast((editingId? "Updated ✔  ":"Saved ✔  ")+company+(when? " · "+when : ""), "ok");
+  const label = companies.length===1 ? companies[0] : companies.length+" companies";
+  toast((editingId? "Updated ✔  ":"Saved ✔  ")+label+(when? " · "+when : ""), "ok");
   resetAddForm();
   refreshStats();
   refreshCompanyList();
@@ -1649,8 +1688,10 @@ async function editRecord(id){
   if(!r){ toast("Record not found","err"); return; }
   // switch to Add tab
   document.querySelector('.tab-btn[data-tab="add"]').click();
-  // header fields
-  $("#fCompany").value = r.company || "";
+  // header fields — show the company as a chip (editing stays single-company)
+  $("#fCompany").value = "";
+  companyList = r.company ? [r.company] : [];
+  renderCompanyChips();
   $("#fMonth").value = r.month || "";
   $("#fYear").value = r.year || "";
   $("#fRoomType").value = r.roomType || "Deluxe Room";
