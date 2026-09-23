@@ -232,10 +232,11 @@
     <div class="card">
       <h2>…or paste the rates as text</h2>
       <p class="sub">Copy a message (e.g. from WhatsApp/email) and paste it here — one rate per line. Then click Read text.</p>
-      <textarea id="pasteBox" rows="6" placeholder="Example:
-Oct 1-15 - AED 210+15
-Oct 11-31 - AED 250+15
-Nov AED 260+15 (No Diwali Supplement as of now)"></textarea>
+      <textarea id="pasteBox" rows="7" placeholder="Example (hotel rates):
+Deluxe Room Rates
+Promo: 3 Nights & Above (5% Additional Discount) | Allotment: 5 Rooms
+Month  BB  RO  NRF
+October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
       <div class="row-actions">
         <button class="btn primary" id="pasteReadBtn">📋 Read text</button>
         <button class="btn ghost" id="pasteClearBtn">Clear</button>
@@ -269,20 +270,42 @@ Nov AED 260+15 (No Diwali Supplement as of now)"></textarea>
         </div>
       </div>
 
+      <div class="grid cols-3" style="margin-bottom:16px">
+        <div>
+          <label>Room type <span class="muted" style="font-weight:400">(optional)</span></label>
+          <input id="fRoomType" placeholder="e.g. Deluxe Room" autocomplete="off" />
+        </div>
+        <div>
+          <label>Promo <span class="muted" style="font-weight:400">(optional)</span></label>
+          <input id="fPromo" placeholder="e.g. 3 Nights & Above (5% off)" autocomplete="off" />
+        </div>
+        <div>
+          <label>Allotment <span class="muted" style="font-weight:400">(optional)</span></label>
+          <input id="fAllotment" placeholder="e.g. 5 Rooms" autocomplete="off" />
+        </div>
+      </div>
+
+      <label>Rates by period</label>
+      <div style="overflow-x:auto">
       <table id="rateTable">
         <thead>
           <tr>
-            <th style="width:55%">Item / Description</th>
-            <th class="num" style="width:30%">Rate (AED)</th>
-            <th style="width:15%"></th>
+            <th style="min-width:150px">Month / Period</th>
+            <th style="min-width:130px">Bed &amp; Breakfast (BB)</th>
+            <th style="min-width:130px">Room Only (RO)</th>
+            <th style="min-width:120px">Non-Refundable (NRF)</th>
+            <th style="min-width:120px">Notes</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="rateBody"></tbody>
       </table>
+      </div>
 
       <div class="row-actions">
-        <button class="btn ghost sm" id="addRowBtn">＋ Add row</button>
+        <button class="btn ghost sm" id="addRowBtn">＋ Add period row</button>
       </div>
+      <p class="hint">Fill only the columns you have — leave the rest blank. <strong>BB</strong> = Bed &amp; Breakfast, <strong>RO</strong> = Room Only, <strong>NRF</strong> = Non-Refundable. You can type values like <code>265 + 15 TD</code> or <code>5%</code>.</p>
 
       <div>
         <label style="margin-top:16px">Notes (optional)</label>
@@ -397,6 +420,7 @@ function toast(msg, type=""){
   setTimeout(()=> t.className = "toast " + type, 2600);
 }
 function esc(s){ return (s??"").toString().replace(/[&<>"]/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function card(inner){ return `<div class="card">${inner}</div>`; }
 function fmtAED(n){
   const num = Number(n);
   if(isNaN(num)) return esc(n);
@@ -539,86 +563,99 @@ async function ocrPDF(dataURL){
   return fullText;
 }
 
-/* ---------- Parse extracted text into rate rows ----------
-   Strategy: on each line, find every number token. Travel rate sheets
-   list the description first and the price last, so we take the LAST
-   number on the line as the rate and use the text before it as the
-   description. We skip header/date lines and obvious noise. The user
-   reviews & edits everything before saving, so we favour catching
-   candidates over being perfectly strict. */
+/* ---------- Parse extracted text into structured hotel rates ----------
+   Returns: { rows:[{period, bb, ro, nrf, note}], roomType, promo, allotment }
+   It looks for:
+     • a room-type title (e.g. "Deluxe Room Rates")
+     • a Promo line and an Allotment line
+     • a header row naming which columns are BB / RO / NRF
+     • data rows (e.g. "October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%")
+   If no BB/RO/NRF structure is found, it falls back to a simpler
+   one-rate-per-line reader (older WhatsApp style). The user reviews &
+   edits everything before saving, so we favour catching candidates. */
 function parseRates(text){
-  const rows = [];
-  const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  const result = { rows: [], roomType: "", promo: "", allotment: "" };
+  const rawLines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
 
-  // A number token: 1,200 | 1200 | 2750.50 | 350  (with optional currency word)
-  const tokenRe = /(?:aed|dhs?|د\.إ)?\s*(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\s*(?:aed|dhs?)?/gi;
-  const monthWords = /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
+  // ---- header info ----
+  for(const line of rawLines){
+    if(!result.roomType){
+      const rt = line.match(/^(.*?\b(?:room|suite|villa|studio|apartment|deluxe|standard|superior|executive|club)\b.*?)\s*rates?\s*$/i);
+      if(rt) result.roomType = rt[1].trim();
+    }
+    if(!result.promo){
+      const pr = line.match(/promo\s*[:\-]?\s*(.+)/i);
+      if(pr) result.promo = pr[1].replace(/\|.*$/,"").trim();
+    }
+    if(!result.allotment){
+      const al = line.match(/allot?ment\s*[:\-]?\s*(.+)/i);
+      if(al) result.allotment = al[1].replace(/\|.*$/,"").trim();
+    }
+  }
 
-  // Matches an AED amount that may include a "+supplement", e.g.
-  // "AED 210+15", "AED 250 + 15", "Dhs 260+15". Captures "210+15".
-  const aedExprRe = /(?:aed|dhs?|د\.إ)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?(?:\s*\+\s*[0-9,]+(?:\.[0-9]{1,2})?)*)/i;
+  // Which column is BB / RO / NRF? Detect from a header line if present.
+  // Default order (as in the sample): BB, RO, NRF.
+  let order = ["bb","ro","nrf"];
+  const headerLine = rawLines.find(l=> /\b(bb|ro|nrf)\b/i.test(l) && /(bed|room only|non[- ]?refundable|breakfast)/i.test(l));
+  if(headerLine){
+    const found = [];
+    // record columns in the order the labels appear
+    [...headerLine.matchAll(/\b(bb|ro|nrf)\b/gi)].forEach(m=> found.push(m[1].toLowerCase()));
+    if(found.length) order = found;
+  }
 
-  for(const line of lines){
-    // skip lines that are clearly headers/notes with no price intent
-    if(/^(note|notes|valid|terms|subject|rates?|price list|dear|regards|thank)/i.test(line)) continue;
-    // skip title/header lines like "... 2026 Rates" or "Rate Sheet"
-    if(/\b(rates?|rate sheet|price list|tariff|quotation)\b\s*$/i.test(line)) continue;
-    // skip page-number lines like "Page 1", "Pg 2 of 5"
-    if(/^p(a?ge?)\b/i.test(line)) continue;
+  const monthMap = {jan:"January",feb:"February",mar:"March",apr:"April",may:"May",jun:"June",
+                    jul:"July",aug:"August",sep:"September",oct:"October",nov:"November",dec:"December"};
+  const monthRe = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\b/i;
+  // a rate cell: number with optional +supplement / TD / % / currency, e.g.
+  // "AED 265 + 15 TD", "240+15", "5%"
+  const cellRe = /(?:aed|dhs?)?\s*(\d[\d,]*(?:\.\d+)?\s*%|\d[\d,]*(?:\.\d+)?(?:\s*\+\s*\d[\d,]*(?:\.\d+)?)?(?:\s*[a-z]{1,3}\b)?)/gi;
 
-    // ---- Preferred path: an explicit "AED <amount>[+supplement]" on the line ----
-    // This handles messages like: "Oct 1-15 - AED 210+15 (note)"
-    const aedM = line.match(aedExprRe);
-    if(aedM){
-      // Keep the full rate expression exactly as written, e.g. "210+15"
-      let rateText = aedM[1].replace(/\s+/g, "");
-      // if it's a plain number (no "+" supplement), store it as a number
-      const plain = rateText.replace(/,/g,"");
-      if(/^\d+(\.\d+)?$/.test(plain)) rateText = parseFloat(plain);
-      // description = everything before the AED keyword
-      let desc = line.slice(0, aedM.index).trim();
-      // capture any trailing note in brackets and append it to the description
-      const noteM = line.slice(aedM.index + aedM[0].length).match(/\(([^)]*)\)|\[([^\]]*)\]/);
-      const note = noteM ? (noteM[1] || noteM[2] || "").trim() : "";
-      desc = desc.replace(/[:\-–—|=.]+$/,"").replace(/^[:\-–—|=.]+/,"").replace(/\s{2,}/g," ").trim();
-      if(!desc) desc = "Item";
-      if(note) desc = desc + " (" + note + ")";
-      rows.push({desc, rate: rateText});
-      continue;
+  // ---- data rows: any line that has a period/month AND at least one number ----
+  const isNoise = l => /^(promo|allot|deluxe|standard|superior|month\b|bed\b|room only|non[- ]?refundable|rates?$)/i.test(l)
+                     || /\b(rates?|room only|bed\s*&?\s*breakfast|non[- ]?refundable)\b/i.test(l) && !/\d/.test(l);
+
+  for(const line of rawLines){
+    if(isNoise(line)) continue;
+    if(!/\d/.test(line)) continue;
+
+    const hasMonth = monthRe.test(line);
+    const cells = [...line.matchAll(cellRe)].map(m=> m[0].replace(/\baed\b|\bdhs?\b/gi,"").replace(/\s+/g," ").trim());
+    // Need something that looks like a period label + at least one rate value
+    if(cells.length === 0) continue;
+
+    // Build the period label: prefer an explicit month/date range at the start.
+    let period = "";
+    const monthM = line.match(monthRe);
+    if(monthM){
+      // capture the month plus any following date-range digits (e.g. "October 2026" or "Oct 1-15")
+      const after = line.slice(monthM.index).match(/^([a-z]+\.?\s*\d{0,4}(?:\s*[-–]\s*\d{1,4})?)/i);
+      period = (after ? after[1] : monthM[0]).trim();
+      // normalise a bare 3-letter month to full name if it stands alone with a year
+      const mkey = monthM[1].toLowerCase();
+      if(monthMap[mkey] && /^[a-z]+\.?$/i.test(monthM[0].trim())) period = period.replace(monthM[0].trim(), monthMap[mkey]);
+    } else {
+      // no month: use the text before the first rate cell as the period label
+      const firstIdx = line.search(cellRe);
+      period = firstIdx > 0 ? line.slice(0, firstIdx).replace(/[:\-–|]+$/,"").trim() : "";
     }
 
-    // ---- Fallback path: pick the last plain number on the line as the rate ----
-    const matches = [...line.matchAll(tokenRe)];
-    if(matches.length === 0) continue;
+    // Remove the year-only cell from rates if the period already captured it
+    // (avoid treating "2026" as a price). Filter cells that are exactly a 4-digit year.
+    const rateCells = cells.filter(c=> !/^\d{4}$/.test(c.replace(/[^\d]/g,"")) || parseInt(c) < 1990 || parseInt(c) > 2100);
 
-    // choose the last numeric token on the line as the price
-    const last = matches[matches.length - 1];
-    const rawNum = last[1].replace(/,/g, "");
-    const val = parseFloat(rawNum);
-    if(isNaN(val)) continue;
+    const row = { period, bb:"", ro:"", nrf:"", note:"" };
+    // assign cells to columns by detected order
+    rateCells.forEach((c,i)=>{ const col = order[i] || "note"; row[col] = row[col] ? (row[col]+" / "+c) : c; });
 
-    // description = everything before that last number token
-    let desc = line.slice(0, last.index).trim();
-    // tidy trailing/leading separators and currency words
-    desc = desc.replace(/\b(aed|dhs?)\b/gi, "")
-               .replace(/[:\-–—|=.]+$/,"")
-               .replace(/^[:\-–—|=.]+/,"")
-               .replace(/\s{2,}/g," ")
-               .trim();
+    // capture trailing bracket note
+    const noteM = line.match(/\(([^)]*)\)|\[([^\]]*)\]/);
+    if(noteM) row.note = (noteM[1]||noteM[2]||"").trim();
 
-    // If the last number looks like a year AND the line mentions a month,
-    // it's a date header (e.g. "... September 2026"), not a rate — skip it.
-    if(val >= 1990 && val <= 2100 && monthWords.test(line)) continue;
-
-    // Skip standalone tiny numbers with no description (likely page numbers / noise)
-    if(!desc && val < 50) continue;
-    // Skip 4-digit values that look like a year when there's no description
-    if(!desc && val >= 1990 && val <= 2100) continue;
-    if(!desc) desc = "Item";
-
-    rows.push({desc, rate: val});
+    if(row.period || row.bb || row.ro || row.nrf) result.rows.push(row);
   }
-  return rows;
+
+  return result;
 }
 
 /* Detect the first month mentioned in a block of text, return the full
@@ -641,25 +678,39 @@ function openReview(text){
   // default year = current
   if(!$("#fYear").value) $("#fYear").value = new Date().getFullYear();
 
-  const rows = parseRates(text);
+  const parsed = parseRates(text);
+  // fill header fields if detected (don't overwrite what the user already typed)
+  if(parsed.roomType && !$("#fRoomType").value) $("#fRoomType").value = parsed.roomType;
+  if(parsed.promo && !$("#fPromo").value) $("#fPromo").value = parsed.promo;
+  if(parsed.allotment && !$("#fAllotment").value) $("#fAllotment").value = parsed.allotment;
+
+  const rows = parsed.rows;
   const body = $("#rateBody");
   body.innerHTML = "";
   if(rows.length===0){
-    addRateRow("", "");
+    addRateRow();
   } else {
-    rows.forEach(r=> addRateRow(r.desc, r.rate));
+    rows.forEach(r=> addRateRow(r));
   }
   refreshCompanyList();
   $("#reviewCard").scrollIntoView({behavior:"smooth"});
-  if(rows.length) toast(`Found ${rows.length} possible rate${rows.length>1?"s":""} — please review`,"ok");
+  if(rows.length) toast(`Found ${rows.length} rate row${rows.length>1?"s":""} — please review`,"ok");
 }
 
-function addRateRow(desc="", rate=""){
+function addRateRow(r={}){
+  const period = r.period ?? "";
+  const bb = r.bb ?? "";
+  const ro = r.ro ?? "";
+  const nrf = r.nrf ?? "";
+  const note = r.note ?? "";
   const tr = document.createElement("tr");
   tr.innerHTML = `
-    <td><input class="rate-input desc" value="${esc(desc)}" placeholder="e.g. Economy ticket / Visa fee" /></td>
-    <td class="num"><input class="rate-input amt" type="text" value="${rate===""||rate==null?"":esc(rate)}" placeholder="e.g. 210+15" style="text-align:right" /></td>
-    <td><button class="btn danger sm rm">Remove</button></td>`;
+    <td><input class="rate-input period" value="${esc(period)}" placeholder="e.g. Oct 1-15" /></td>
+    <td><input class="rate-input bb" value="${esc(bb)}" placeholder="e.g. 265 + 15 TD" /></td>
+    <td><input class="rate-input ro" value="${esc(ro)}" placeholder="e.g. 240 + 15 TD" /></td>
+    <td><input class="rate-input nrf" value="${esc(nrf)}" placeholder="e.g. 5%" /></td>
+    <td><input class="rate-input note" value="${esc(note)}" placeholder="optional" /></td>
+    <td><button class="btn danger sm rm">✕</button></td>`;
   tr.querySelector(".rm").addEventListener("click", ()=> tr.remove());
   $("#rateBody").appendChild(tr);
 }
@@ -676,6 +727,7 @@ function resetAddForm(){
   $("#reviewCard").style.display="none";
   $("#previewImg").style.display="none";
   $("#fCompany").value=""; $("#fMonth").value=""; $("#fNotes").value="";
+  $("#fRoomType").value=""; $("#fPromo").value=""; $("#fAllotment").value="";
   $("#rateBody").innerHTML="";
   $("#pasteBox").value="";
   pendingFile=null; pendingDataURL=null;
@@ -692,18 +744,14 @@ $("#saveBtn").addEventListener("click", async ()=>{
 
   const rates = [];
   $("#rateBody").querySelectorAll("tr").forEach(tr=>{
-    const desc = tr.querySelector(".desc").value.trim();
-    let amt = tr.querySelector(".amt").value.trim();
-    // If it's a plain number, store as a number; otherwise keep the text
-    // expression as-is (e.g. "210+15", "260+15 (No Diwali)").
-    let rateVal = null;
-    if(amt !== ""){
-      const cleaned = amt.replace(/,/g,"");
-      rateVal = /^\d+(\.\d+)?$/.test(cleaned) ? parseFloat(cleaned) : amt;
-    }
-    if(desc || amt) rates.push({desc: desc||"Item", rate: rateVal});
+    const period = tr.querySelector(".period").value.trim();
+    const bb = tr.querySelector(".bb").value.trim();
+    const ro = tr.querySelector(".ro").value.trim();
+    const nrf = tr.querySelector(".nrf").value.trim();
+    const note = tr.querySelector(".note").value.trim();
+    if(period || bb || ro || nrf || note) rates.push({period, bb, ro, nrf, note});
   });
-  if(rates.length===0){ toast("Add at least one rate","err"); return; }
+  if(rates.length===0){ toast("Add at least one rate row","err"); return; }
 
   let fileId = null;
   if(pendingFile && pendingDataURL){
@@ -715,7 +763,11 @@ $("#saveBtn").addEventListener("click", async ()=>{
     id: uid(),
     company, companyLower: company.toLowerCase(),
     month, year, currency:"AED",
-    rates,
+    roomType: $("#fRoomType").value.trim(),
+    promo: $("#fPromo").value.trim(),
+    allotment: $("#fAllotment").value.trim(),
+    rates,          // array of {period, bb, ro, nrf, note}
+    schema: 2,      // marks the new multi-column format
     notes: $("#fNotes").value.trim(),
     fileId,
     fileName: pendingFile ? pendingFile.name : null,
@@ -778,8 +830,38 @@ async function renderAll(){
 
 /* ---------- Shared record renderer ---------- */
 function recordBlock(r){
-  const rateRows = r.rates.map(x=>`
-    <tr><td>${esc(x.desc)}</td><td class="num">${x.rate==null?"—":"AED "+fmtAED(x.rate)}</td></tr>`).join("");
+  const aed = v => (v===null||v===undefined||v==="") ? "—" : (/%|\bTD\b|[a-zA-Z]/.test(String(v)) ? esc(v) : "AED "+fmtAED(v));
+  let rateTable;
+
+  if(r.schema === 2 && Array.isArray(r.rates)){
+    // new multi-column hotel format (BB / RO / NRF)
+    const hasNote = r.rates.some(x=> x.note);
+    const body = r.rates.map(x=>`
+      <tr>
+        <td><strong>${esc(x.period||"—")}</strong></td>
+        <td>${x.bb?("AED "+esc(x.bb)) : "—"}</td>
+        <td>${x.ro?("AED "+esc(x.ro)) : "—"}</td>
+        <td>${x.nrf? esc(x.nrf) : "—"}</td>
+        ${hasNote? `<td>${esc(x.note||"")}</td>`:""}
+      </tr>`).join("");
+    rateTable = `<div style="overflow-x:auto"><table>
+      <thead><tr>
+        <th>Month / Period</th><th>Bed &amp; Breakfast (BB)</th><th>Room Only (RO)</th><th>Non-Refundable (NRF)</th>${hasNote?"<th>Notes</th>":""}
+      </tr></thead><tbody>${body}</tbody></table></div>`;
+  } else {
+    // legacy format: {desc, rate}
+    const body = (r.rates||[]).map(x=>`
+      <tr><td>${esc(x.desc)}</td><td class="num">${aed(x.rate)}</td></tr>`).join("");
+    rateTable = `<table><thead><tr><th>Item</th><th class="num">Rate</th></tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  // header meta chips (room type / promo / allotment)
+  const meta = [
+    r.roomType ? `<span class="chip" style="background:#ede9fe;color:#5b21b6">🏨 ${esc(r.roomType)}</span>` : "",
+    r.promo ? `<span class="chip" style="background:#fce7f3;color:#9d174d">🎁 ${esc(r.promo)}</span>` : "",
+    r.allotment ? `<span class="chip" style="background:#e0f2fe;color:#075985">🛏️ ${esc(r.allotment)}</span>` : ""
+  ].join("");
+
   const fileBtn = r.fileId
     ? `<span class="file-pill view-file" data-file="${r.fileId}" data-name="${esc(r.fileName||"file")}">📎 ${esc(r.fileName||"View file")}</span>`
     : `<span class="muted" style="font-size:12px">No file attached</span>`;
@@ -792,7 +874,8 @@ function recordBlock(r){
       ${fileBtn}
       <button class="btn danger sm del-rec" data-id="${r.id}" data-file="${r.fileId||""}">Delete</button>
     </div>
-    <table><thead><tr><th>Item</th><th class="num">Rate</th></tr></thead><tbody>${rateRows}</tbody></table>
+    ${meta? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px">${meta}</div>`:""}
+    ${rateTable}
     ${r.notes? `<p class="hint">📝 ${esc(r.notes)}</p>`:""}
   </div>`;
 }
