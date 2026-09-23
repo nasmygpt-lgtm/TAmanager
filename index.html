@@ -407,6 +407,16 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
       <hr style="border:none; border-top:1px solid var(--line); margin:18px 0" />
       <button class="btn danger sm" id="wipeBtn">🗑️ Erase all data</button>
     </div>
+
+    <div class="card">
+      <h2>🔧 Diagnose &amp; repair</h2>
+      <p class="sub">See exactly what's stored for each record, and auto-fix old-format records into the BB/RO/NRF table.</p>
+      <div class="row-actions">
+        <button class="btn ghost" id="diagBtn">🔍 Show stored data</button>
+        <button class="btn primary" id="fixAllBtn">🔧 Convert old records to BB/RO/NRF</button>
+      </div>
+      <pre id="diagOut" style="display:none; white-space:pre-wrap; background:#f8fafc; padding:12px; border-radius:10px; font-size:12px; max-height:320px; overflow:auto; margin-top:12px"></pre>
+    </div>
   </section>
 
 </div>
@@ -1153,6 +1163,80 @@ $("#wipeBtn").addEventListener("click", async ()=>{
   await clearStore("rates"); await clearStore("files");
   toast("All data erased");
   refreshStats(); refreshCompanyList(); renderAll(); renderSearch("");
+});
+
+/* ---------- Diagnose: show exactly what's stored ---------- */
+$("#diagBtn").addEventListener("click", async ()=>{
+  const all = await getAll("rates");
+  const out = $("#diagOut");
+  if(all.length===0){ out.style.display="block"; out.textContent="(no records stored)"; return; }
+  const lines = all.map((r,i)=>{
+    const isNew = r.schema===2 && Array.isArray(r.rates);
+    let rateStr;
+    if(isNew){
+      rateStr = r.rates.map(x=>`      • period="${x.period}" | BB="${x.bb}" | RO="${x.ro}" | NRF="${x.nrf}"`).join("\n");
+    } else {
+      rateStr = (r.rates||[]).map(x=>`      • desc="${x.desc}" | rate="${x.rate}"  (OLD FORMAT)`).join("\n");
+    }
+    return `#${i+1}  ${r.company} · ${r.month} ${r.year||""}\n`
+      + `    format: ${isNew?"NEW (BB/RO/NRF) ✔":"OLD ✗ — needs Convert"}\n`
+      + `    roomType="${r.roomType||""}" promo="${r.promo||""}" allotment="${r.allotment||""}"\n`
+      + rateStr;
+  });
+  out.style.display="block";
+  out.textContent = lines.join("\n\n");
+});
+
+/* ---------- Repair: convert OLD records into the BB/RO/NRF table ----------
+   For each legacy record that has an attached screenshot, we re-OCR it and
+   rebuild in the new schema. If there's no image, we do a best-effort text
+   parse of the old descriptions so at least the structure is upgraded. */
+$("#fixAllBtn").addEventListener("click", async ()=>{
+  const all = await getAll("rates");
+  const legacy = all.filter(r=> !(r.schema===2 && Array.isArray(r.rates)));
+  if(legacy.length===0){ toast("All records are already in BB/RO/NRF format ✔","ok"); return; }
+  if(!confirm(`Convert ${legacy.length} old record(s) to the BB/RO/NRF format? Records with a screenshot will be re-read automatically.`)) return;
+
+  let done=0;
+  for(const r of legacy){
+    let rebuilt = null;
+    // 1) prefer re-reading the attached image
+    if(r.fileId){
+      const f = await getOne("files", r.fileId);
+      if(f && (f.type||"").indexOf("pdf")===-1){
+        try{
+          setProgress(true, 10, `Re-reading ${r.company}…`);
+          const text = await ocrImage(f.dataURL);
+          const parsed = parseRates(text);
+          if(parsed.rows.length){
+            rebuilt = {
+              roomType: parsed.roomType || r.roomType || "Deluxe Room",
+              promo: parsed.promo || r.promo || "",
+              allotment: parsed.allotment || r.allotment || "",
+              rates: parsed.rows
+            };
+          }
+        }catch(e){ console.error(e); }
+      }
+    }
+    // 2) fallback: map old {desc,rate} into a single period row
+    if(!rebuilt){
+      const first = (r.rates||[])[0] || {};
+      rebuilt = {
+        roomType: r.roomType || "Deluxe Room",
+        promo: r.promo || "",
+        allotment: r.allotment || "",
+        rates: [{ period: `${r.month} ${r.year||""}`.trim(), bb:"", ro:"", nrf:"", note:"(please fill BB/RO/NRF manually)" }]
+      };
+    }
+    const upgraded = { ...r, schema:2, ...rebuilt, updatedAt:Date.now() };
+    await put("rates", upgraded);
+    done++;
+  }
+  setProgress(false);
+  toast(`Converted ${done} record(s). Please open each and verify NRF.`,"ok");
+  refreshStats(); renderAll(); renderSearch($("#searchInput").value);
+  $("#diagBtn").click();
 });
 
 /* ============================================================
