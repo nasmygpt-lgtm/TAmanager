@@ -599,7 +599,10 @@ $("#pasteReadBtn").addEventListener("click", ()=>{
   pendingFile = null; pendingDataURL = null;
   const m = detectMonth(text);
   if(m) $("#fMonth").value = m;   // auto-fill month if we can spot it
-  openReview(text);
+  // pasted messages use the simple line-by-line reader (not the table parser)
+  const grid = parsePastedLines(text);
+  openReview(text, grid);
+  toast(`Read ${grid.rows.length} line(s) — please check`,"ok");
 });
 $("#pasteClearBtn").addEventListener("click", ()=>{ $("#pasteBox").value = ""; });
 
@@ -1207,8 +1210,35 @@ function renderReferencePane(){
   }
 }
 
-/* ---------- Review form (generic table grid) ---------- */
-function openReview(text){
+/* Parse a pasted WhatsApp/email message into a simple 2-column grid:
+   Description | Rate (AED). One row per line — keeps values like "240+15"
+   and notes in brackets intact, so free-text messages aren't mangled. */
+function parsePastedLines(text){
+  const rows = [];
+  const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  // find "AED <amount>" (with optional +supplement) anywhere in the line
+  const aedRe = /(?:aed|dhs?)\s*([0-9][0-9,]*(?:\.[0-9]+)?(?:\s*\+\s*[0-9,]+(?:\.[0-9]+)?)*)/i;
+  for(const line of lines){
+    const m = line.match(aedRe);
+    if(m){
+      const rate = "AED " + m[1].replace(/\s+/g,"");
+      // description = the line with the AED amount removed, tidied
+      let desc = (line.slice(0,m.index) + line.slice(m.index + m[0].length))
+                 .replace(/\s{2,}/g," ").replace(/[-–:\s]+$/,"").replace(/^[-–:\s]+/,"").trim();
+      if(!desc) desc = "Rate";
+      rows.push([desc, rate]);
+    } else {
+      // no AED amount — keep the whole line in the description column
+      rows.push([line, ""]);
+    }
+  }
+  return { headers:["Description","Rate (AED)"], rows };
+}
+
+/* ---------- Review form (generic table grid) ----------
+   `pre` (optional) is a pre-built {headers, rows} grid — used by the paste
+   button so free-text messages skip the table parser. */
+function openReview(text, pre){
   $("#reviewCard").style.display = "block";
   $("#rawText").textContent = text || "(no text detected)";
   $("#rawText").style.display = "none";
@@ -1217,23 +1247,25 @@ function openReview(text){
 
   if(!$("#fYear").value) $("#fYear").value = new Date().getFullYear();
 
-  // Build the best table we can, in priority order:
-  //   1) spatial grid from PDF coordinates (most accurate for any layout)
-  //   2) generic text-based table reader (screenshots / OCR / paste)
-  //   3) raw spatial grid rows shown as-is (last resort, so nothing is lost)
   let headers = [], rows = [], title = "";
 
-  if(lastPdfGrid && lastPdfGrid.rows.length){
+  // 0) a pre-built grid (e.g. from pasted text) takes priority
+  if(pre && pre.headers && pre.rows.length){
+    headers = pre.headers; rows = pre.rows;
+  }
+  // 1) spatial grid from PDF coordinates (most accurate for any layout)
+  if(rows.length === 0 && lastPdfGrid && lastPdfGrid.rows.length){
     const g = gridToHeadersRows(lastPdfGrid.rows);
     headers = g.headers; rows = g.rows; title = g.title || "";
   }
+  // 2) generic text-based table reader (screenshots / OCR)
   if(rows.length === 0){
     const table = parseGenericTable(text);
     if(table.headers.length && table.rows.length){
       headers = table.headers; rows = table.rows; title = table.title;
     }
   }
-  // last resort: show the raw spatial grid rows directly (first row = headers)
+  // 3) last resort: show the raw spatial grid rows directly
   if(rows.length === 0 && lastPdfGrid && lastPdfGrid.rows.length){
     const raw = lastPdfGrid.rows;
     headers = raw[0].map((c,i)=> c.trim() || ("Column "+(i+1)));
