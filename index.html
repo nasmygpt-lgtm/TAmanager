@@ -229,6 +229,20 @@
       </div>
     </div>
 
+    <div class="card">
+      <h2>…or paste the rates as text</h2>
+      <p class="sub">Copy a message (e.g. from WhatsApp/email) and paste it here — one rate per line. Then click Read text.</p>
+      <textarea id="pasteBox" rows="6" placeholder="Example:
+Oct 1-15 - AED 210+15
+Oct 11-31 - AED 250+15
+Nov AED 260+15 (No Diwali Supplement as of now)"></textarea>
+      <div class="row-actions">
+        <button class="btn primary" id="pasteReadBtn">📋 Read text</button>
+        <button class="btn ghost" id="pasteClearBtn">Clear</button>
+      </div>
+      <p class="hint">Tip: keep each rate on its own line. Extra notes in brackets like <code>(No Diwali Supplement)</code> are kept with that line.</p>
+    </div>
+
     <div class="card" id="reviewCard" style="display:none">
       <h2>Review &amp; save rates</h2>
       <p class="sub">Fill in the company &amp; month, then check the rates the reader found. Edit anything that's off, add or remove rows, then save.</p>
@@ -415,6 +429,19 @@ drop.addEventListener("click", ()=> fileInput.click());
 drop.addEventListener("drop", e=>{ if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
 fileInput.addEventListener("change", e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); });
 
+/* ---- Paste-as-text option ---- */
+$("#pasteReadBtn").addEventListener("click", ()=>{
+  const text = $("#pasteBox").value.trim();
+  if(!text){ toast("Paste some rate text first","err"); $("#pasteBox").focus(); return; }
+  // pasted text has no attached file
+  pendingFile = null; pendingDataURL = null;
+  $("#previewImg").style.display = "none";
+  const m = detectMonth(text);
+  if(m) $("#fMonth").value = m;   // auto-fill month if we can spot it
+  openReview(text);
+});
+$("#pasteClearBtn").addEventListener("click", ()=>{ $("#pasteBox").value = ""; });
+
 function setProgress(show, pct, label){
   const p = $("#ocrProgress");
   p.classList.toggle("show", show);
@@ -527,6 +554,10 @@ function parseRates(text){
   const tokenRe = /(?:aed|dhs?|د\.إ)?\s*(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\s*(?:aed|dhs?)?/gi;
   const monthWords = /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
 
+  // Matches an AED amount that may include a "+supplement", e.g.
+  // "AED 210+15", "AED 250 + 15", "Dhs 260+15". Captures "210+15".
+  const aedExprRe = /(?:aed|dhs?|د\.إ)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?(?:\s*\+\s*[0-9,]+(?:\.[0-9]{1,2})?)*)/i;
+
   for(const line of lines){
     // skip lines that are clearly headers/notes with no price intent
     if(/^(note|notes|valid|terms|subject|rates?|price list|dear|regards|thank)/i.test(line)) continue;
@@ -535,6 +566,28 @@ function parseRates(text){
     // skip page-number lines like "Page 1", "Pg 2 of 5"
     if(/^p(a?ge?)\b/i.test(line)) continue;
 
+    // ---- Preferred path: an explicit "AED <amount>[+supplement]" on the line ----
+    // This handles messages like: "Oct 1-15 - AED 210+15 (note)"
+    const aedM = line.match(aedExprRe);
+    if(aedM){
+      // Keep the full rate expression exactly as written, e.g. "210+15"
+      let rateText = aedM[1].replace(/\s+/g, "");
+      // if it's a plain number (no "+" supplement), store it as a number
+      const plain = rateText.replace(/,/g,"");
+      if(/^\d+(\.\d+)?$/.test(plain)) rateText = parseFloat(plain);
+      // description = everything before the AED keyword
+      let desc = line.slice(0, aedM.index).trim();
+      // capture any trailing note in brackets and append it to the description
+      const noteM = line.slice(aedM.index + aedM[0].length).match(/\(([^)]*)\)|\[([^\]]*)\]/);
+      const note = noteM ? (noteM[1] || noteM[2] || "").trim() : "";
+      desc = desc.replace(/[:\-–—|=.]+$/,"").replace(/^[:\-–—|=.]+/,"").replace(/\s{2,}/g," ").trim();
+      if(!desc) desc = "Item";
+      if(note) desc = desc + " (" + note + ")";
+      rows.push({desc, rate: rateText});
+      continue;
+    }
+
+    // ---- Fallback path: pick the last plain number on the line as the rate ----
     const matches = [...line.matchAll(tokenRe)];
     if(matches.length === 0) continue;
 
@@ -568,6 +621,16 @@ function parseRates(text){
   return rows;
 }
 
+/* Detect the first month mentioned in a block of text, return the full
+   month name (e.g. "October") or "" if none found. Used to auto-fill the
+   month field when the user pastes a message. */
+function detectMonth(text){
+  const map = {jan:"January",feb:"February",mar:"March",apr:"April",may:"May",jun:"June",
+               jul:"July",aug:"August",sep:"September",oct:"October",nov:"November",dec:"December"};
+  const m = text.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i);
+  return m ? map[m[1].toLowerCase()] : "";
+}
+
 /* ---------- Review form ---------- */
 function openReview(text){
   $("#reviewCard").style.display = "block";
@@ -595,7 +658,7 @@ function addRateRow(desc="", rate=""){
   const tr = document.createElement("tr");
   tr.innerHTML = `
     <td><input class="rate-input desc" value="${esc(desc)}" placeholder="e.g. Economy ticket / Visa fee" /></td>
-    <td class="num"><input class="rate-input amt" type="number" step="0.01" value="${rate===""?"":esc(rate)}" placeholder="0.00" style="text-align:right" /></td>
+    <td class="num"><input class="rate-input amt" type="text" value="${rate===""||rate==null?"":esc(rate)}" placeholder="e.g. 210+15" style="text-align:right" /></td>
     <td><button class="btn danger sm rm">Remove</button></td>`;
   tr.querySelector(".rm").addEventListener("click", ()=> tr.remove());
   $("#rateBody").appendChild(tr);
@@ -614,6 +677,7 @@ function resetAddForm(){
   $("#previewImg").style.display="none";
   $("#fCompany").value=""; $("#fMonth").value=""; $("#fNotes").value="";
   $("#rateBody").innerHTML="";
+  $("#pasteBox").value="";
   pendingFile=null; pendingDataURL=null;
   fileInput.value="";
 }
@@ -629,8 +693,15 @@ $("#saveBtn").addEventListener("click", async ()=>{
   const rates = [];
   $("#rateBody").querySelectorAll("tr").forEach(tr=>{
     const desc = tr.querySelector(".desc").value.trim();
-    const amt = tr.querySelector(".amt").value.trim();
-    if(desc || amt) rates.push({desc: desc||"Item", rate: amt===""? null : parseFloat(amt)});
+    let amt = tr.querySelector(".amt").value.trim();
+    // If it's a plain number, store as a number; otherwise keep the text
+    // expression as-is (e.g. "210+15", "260+15 (No Diwali)").
+    let rateVal = null;
+    if(amt !== ""){
+      const cleaned = amt.replace(/,/g,"");
+      rateVal = /^\d+(\.\d+)?$/.test(cleaned) ? parseFloat(cleaned) : amt;
+    }
+    if(desc || amt) rates.push({desc: desc||"Item", rate: rateVal});
   });
   if(rates.length===0){ toast("Add at least one rate","err"); return; }
 
