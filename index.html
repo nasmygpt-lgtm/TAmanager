@@ -1042,8 +1042,10 @@ async function editRecord(id){
   $("#rereadBtn").style.display = (pendingDataURL && (pendingFile.type||"").indexOf("pdf")===-1) ? "" : "none";
   $("#saveBtn").textContent = "💾 Update this record";
   $("#reviewCard").scrollIntoView({behavior:"smooth"});
-  if(isLegacy && pendingDataURL){
-    toast("Old-format record — click 🔄 Re-read from screenshot to rebuild BB/RO/NRF","ok");
+  if(isLegacy && pendingDataURL && (pendingFile.type||"").indexOf("pdf")===-1){
+    // auto-upgrade: re-scan the screenshot so it comes back as BB/RO/NRF
+    toast("Old-format record — re-reading the screenshot for you…","ok");
+    await rereadFromScreenshot();
   } else {
     toast("Editing — make your changes and click Update");
   }
@@ -1051,27 +1053,27 @@ async function editRecord(id){
 
 /* Re-run OCR on the currently attached screenshot and rebuild the rate rows
    in the new BB/RO/NRF format. Used to upgrade old records or re-scan. */
-$("#rereadBtn").addEventListener("click", async ()=>{
+async function rereadFromScreenshot(){
   if(!pendingDataURL){ toast("No screenshot attached to re-read","err"); return; }
   setProgress(true, 5, "Re-reading screenshot…");
   try{
     const text = await ocrImage(pendingDataURL);
     setProgress(false);
     const parsed = parseRates(text);
-    // fill header fields (only if empty, to avoid wiping your manual edits)
     if(parsed.roomType) $("#fRoomType").value = parsed.roomType;
     if(parsed.promo) $("#fPromo").value = parsed.promo;
     if(parsed.allotment) $("#fAllotment").value = parsed.allotment;
     $("#rawText").textContent = text || "(no text detected)";
-    // rebuild rows
     $("#rateBody").innerHTML = "";
     if(parsed.rows.length) parsed.rows.forEach(x=> addRateRow(x)); else addRateRow();
-    toast(`Re-read done — found ${parsed.rows.length} row(s). Check & Update.`,"ok");
+    toast(`Re-read done — found ${parsed.rows.length} row(s). Check NRF & click Update.`,"ok");
   }catch(err){
     console.error(err); setProgress(false);
-    toast("Couldn't re-read the image","err");
+    toast("Couldn't re-read the image — type the values manually","err");
   }
-});
+}
+
+$("#rereadBtn").addEventListener("click", rereadFromScreenshot);
 
 /* ---------- File viewer ---------- */
 async function viewFile(fileId, name){
