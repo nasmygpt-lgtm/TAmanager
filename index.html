@@ -9,6 +9,8 @@
      OCR: Tesseract.js  |  PDF rendering: PDF.js -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Supabase: cloud database + login so your data is safe on a server and synced across devices -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
   if (window.pdfjsLib) {
     pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -49,6 +51,12 @@
     border:1px solid rgba(255,255,255,.25); color:#fff; padding:4px 12px;
     border-radius:999px; font-size:12px; font-weight:600; letter-spacing:.5px;
   }
+  .cloud-pill{
+    display:inline-block; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.25);
+    color:#fff; padding:4px 12px; border-radius:999px; font-size:12px; font-weight:600;
+  }
+  .cloud-pill.ok{background:rgba(16,185,129,.25); border-color:rgba(16,185,129,.5)}
+  .cloud-pill.err{background:rgba(239,68,68,.25); border-color:rgba(239,68,68,.5)}
   .wrap{max-width:1100px; margin:0 auto; padding:0 16px 60px}
 
   .tabs{
@@ -224,6 +232,10 @@
   <h1>✈️ Travel Rate Manager</h1>
   <p>Store, read &amp; search travel-agency rates — from screenshots &amp; PDFs</p>
   <span class="badge-cur">Currency: AED (د.إ)</span>
+  <div id="cloudBar" style="margin-top:10px; font-size:13px">
+    <span id="cloudStatus" class="cloud-pill">☁️ Cloud: not connected</span>
+    <button id="cloudLogoutBtn" class="btn ghost sm" style="display:none">Log out</button>
+  </div>
 </header>
 
 <div class="wrap">
@@ -238,6 +250,7 @@
     <button class="tab-btn active" data-tab="add">➕ Add Rates</button>
     <button class="tab-btn" data-tab="search">🔍 Search Company</button>
     <button class="tab-btn" data-tab="all">📋 All Records</button>
+    <button class="tab-btn" data-tab="cloud">☁️ Cloud</button>
     <button class="tab-btn" data-tab="backup">💾 Backup</button>
   </div>
 
@@ -381,6 +394,77 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
     </div>
   </section>
 
+  <!-- CLOUD PANEL -->
+  <section class="panel" id="panel-cloud">
+    <div class="card">
+      <h2>☁️ Cloud storage &amp; sync</h2>
+      <p class="sub">Keep your data safe on a server and synced across all your devices (phone + laptop). Survives clearing your browser.</p>
+
+      <div id="cloudSetup">
+        <p class="hint" style="margin-bottom:14px">
+          <strong>One-time setup.</strong> Create a free Supabase project, then paste the two values below.
+          Detailed steps are at the bottom of this page. Your values are saved on this device so you only enter them once.
+        </p>
+        <div class="grid cols-2" style="margin-bottom:12px">
+          <div>
+            <label>Supabase Project URL</label>
+            <input id="cfgUrl" placeholder="https://xxxxx.supabase.co" autocomplete="off" />
+          </div>
+          <div>
+            <label>Supabase anon key (public)</label>
+            <input id="cfgKey" placeholder="eyJhbGciOi… (long key)" autocomplete="off" />
+          </div>
+        </div>
+        <button class="btn primary" id="cfgSaveBtn">🔗 Connect to cloud</button>
+      </div>
+
+      <div id="cloudAuth" style="display:none">
+        <hr style="border:none; border-top:1px solid var(--line); margin:14px 0" />
+        <p id="cloudAuthMsg" class="hint" style="margin-bottom:12px">Connected ✓ — log in or create your account to sync.</p>
+        <div class="grid cols-2" style="margin-bottom:12px">
+          <div>
+            <label>Email</label>
+            <input id="authEmail" type="email" placeholder="you@example.com" autocomplete="username" />
+          </div>
+          <div>
+            <label>Password</label>
+            <input id="authPass" type="password" placeholder="your password" autocomplete="current-password" />
+          </div>
+        </div>
+        <div class="row-actions">
+          <button class="btn green" id="loginBtn">🔓 Log in</button>
+          <button class="btn ghost" id="signupBtn">🆕 Create account</button>
+          <button class="btn ghost sm" id="cfgResetBtn" style="margin-left:auto">Change cloud settings</button>
+        </div>
+      </div>
+
+      <div id="cloudSynced" style="display:none">
+        <hr style="border:none; border-top:1px solid var(--line); margin:14px 0" />
+        <p class="hint" id="cloudSyncedMsg">✅ Signed in. Your data syncs automatically.</p>
+        <div class="row-actions">
+          <button class="btn primary" id="syncNowBtn">🔄 Sync now</button>
+          <button class="btn ghost" id="pushLocalBtn">⬆️ Upload this device's data to cloud</button>
+        </div>
+      </div>
+
+      <hr style="border:none; border-top:1px solid var(--line); margin:18px 0" />
+      <details>
+        <summary style="cursor:pointer; font-weight:700; color:var(--brand-d)">📖 How to set up (free, ~5 minutes) — click to expand</summary>
+        <ol class="hint" style="line-height:1.8; margin-top:10px">
+          <li>Go to <strong>supabase.com</strong> and sign up (free).</li>
+          <li>Click <strong>New Project</strong>. Give it a name and a database password. Wait ~2 min for it to be ready.</li>
+          <li>In your project: left menu → <strong>Project Settings → API</strong>.</li>
+          <li>Copy the <strong>Project URL</strong> and the <strong>anon public</strong> key into the boxes above, then click <em>Connect to cloud</em>.</li>
+          <li>Go to the <strong>SQL Editor</strong> (left menu), paste the setup script below, and click <strong>Run</strong>. This creates your private tables.</li>
+          <li>Come back here, create your account (email + password), and log in. Your data will sync!</li>
+        </ol>
+        <p class="hint" style="margin-top:10px"><strong>SQL setup script</strong> (copy all, run once in Supabase SQL Editor):</p>
+        <pre id="sqlScript" style="white-space:pre-wrap; background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:12px; font-size:11px; max-height:260px; overflow:auto"></pre>
+        <button class="btn ghost sm" id="copySqlBtn">📋 Copy SQL</button>
+      </details>
+    </div>
+  </section>
+
   <!-- BACKUP PANEL -->
   <section class="panel" id="panel-backup">
     <div class="card">
@@ -484,6 +568,7 @@ document.querySelectorAll(".tab-btn").forEach(b=>{
     $("#panel-"+b.dataset.tab).classList.add("active");
     if(b.dataset.tab==="all") renderAll();
     if(b.dataset.tab==="search") { renderSearch($("#searchInput").value); refreshCompanyList(); }
+    if(b.dataset.tab==="cloud") refreshCloudUI();
   });
 });
 
@@ -1337,7 +1422,9 @@ $("#saveBtn").addEventListener("click", async ()=>{
   // if a NEW file was provided that isn't the stored one, save it
   if(pendingFile && pendingDataURL && !(existing && existing.fileId)){
     fileId = uid();
-    await put("files", { id:fileId, name:pendingFile.name, type:pendingFile.type, dataURL:pendingDataURL });
+    const fileObj = { id:fileId, name:pendingFile.name, type:pendingFile.type, dataURL:pendingDataURL };
+    await put("files", fileObj);
+    cloudUpsertFile(fileObj);
   }
 
   const record = {
@@ -1355,6 +1442,7 @@ $("#saveBtn").addEventListener("click", async ()=>{
     updatedAt: Date.now()
   };
   await put("rates", record);
+  cloudUpsertRate(record);
   const when = [month, year].filter(Boolean).join(" ");
   toast((editingId? "Updated ✔  ":"Saved ✔  ")+company+(when? " · "+when : ""), "ok");
   resetAddForm();
@@ -1497,7 +1585,8 @@ function attachRecordHandlers(scope){
     el.addEventListener("click", async ()=>{
       if(!confirm("Delete this rate entry?")) return;
       await del("rates", el.dataset.id);
-      if(el.dataset.file) await del("files", el.dataset.file);
+      cloudDeleteRate(el.dataset.id);
+      if(el.dataset.file){ await del("files", el.dataset.file); cloudDeleteFile(el.dataset.file); }
       toast("Deleted");
       refreshStats();
       renderSearch($("#searchInput").value);
@@ -1656,8 +1745,8 @@ $("#importInput").addEventListener("change", async e=>{
     const data = JSON.parse(text);
     if(data.app!=="TravelRateManager") throw new Error("Not a valid backup");
     if(!confirm("Import backup? This adds the backup's records to your current data.")) return;
-    for(const r of (data.rates||[])) await put("rates", r);
-    for(const f of (data.files||[])) await put("files", f);
+    for(const r of (data.rates||[])){ await put("rates", r); cloudUpsertRate(r); }
+    for(const f of (data.files||[])){ await put("files", f); cloudUpsertFile(f); }
     toast("Backup imported ✔","ok");
     refreshStats(); refreshCompanyList(); renderAll();
   }catch(err){
@@ -1709,12 +1798,179 @@ $("#fixAllBtn").addEventListener("click", async ()=>{
     const upgraded = { ...r, schema:4, table:grid, updatedAt:Date.now() };
     delete upgraded.rates; delete upgraded.plainText; delete upgraded.displayMode;
     await put("rates", upgraded);
+    cloudUpsertRate(upgraded);
     done++;
   }
   toast(`Converted ${done} record(s) to the table format.`,"ok");
   refreshStats(); renderAll(); renderSearch($("#searchInput").value);
   $("#diagBtn").click();
 });
+
+/* ============================================================
+   CLOUD SYNC (Supabase) — keeps data on a server, synced across devices
+   ============================================================ */
+let sb = null;          // supabase client
+let cloudUser = null;   // logged-in user
+
+// The SQL the user runs once in Supabase to create their private tables.
+const SETUP_SQL = `-- Travel Rate Manager — run once in Supabase SQL Editor
+create table if not exists rates (
+  id text primary key,
+  user_id uuid not null default auth.uid(),
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+create table if not exists files (
+  id text primary key,
+  user_id uuid not null default auth.uid(),
+  data jsonb not null
+);
+alter table rates enable row level security;
+alter table files enable row level security;
+-- each user can only see/change their own rows
+create policy "own rates" on rates for all
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "own files" on files for all
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
+
+function setCloudStatus(text, cls){
+  const el = $("#cloudStatus");
+  el.textContent = text;
+  el.className = "cloud-pill" + (cls?(" "+cls):"");
+}
+
+function cloudCfg(){
+  try { return JSON.parse(localStorage.getItem("trm_cloud")||"null"); } catch(e){ return null; }
+}
+
+function initSupabase(){
+  const cfg = cloudCfg();
+  if(!cfg || !cfg.url || !cfg.key){ return false; }
+  if(!window.supabase){ setCloudStatus("☁️ Cloud library not loaded (need internet)","err"); return false; }
+  try{
+    sb = window.supabase.createClient(cfg.url, cfg.key);
+    return true;
+  }catch(e){ console.error(e); return false; }
+}
+
+function showCloudSection(which){
+  $("#cloudSetup").style.display  = which==="setup" ? "" : "none";
+  $("#cloudAuth").style.display   = which==="auth"  ? "" : "none";
+  $("#cloudSynced").style.display = which==="synced"? "" : "none";
+}
+
+// ---- config connect ----
+$("#cfgSaveBtn").addEventListener("click", ()=>{
+  const url = $("#cfgUrl").value.trim().replace(/\/$/,"");
+  const key = $("#cfgKey").value.trim();
+  if(!/^https:\/\/.+\.supabase\.co$/.test(url)){ toast("Enter a valid Supabase Project URL","err"); return; }
+  if(key.length < 20){ toast("Enter the anon public key","err"); return; }
+  localStorage.setItem("trm_cloud", JSON.stringify({url, key}));
+  if(initSupabase()){ toast("Connected — now log in","ok"); refreshCloudUI(); }
+  else toast("Could not connect — check the values","err");
+});
+$("#cfgResetBtn").addEventListener("click", ()=>{
+  if(!confirm("Change cloud settings? You'll need to re-enter the URL and key.")) return;
+  localStorage.removeItem("trm_cloud"); sb=null; cloudUser=null;
+  $("#cfgUrl").value=""; $("#cfgKey").value="";
+  refreshCloudUI();
+});
+
+// ---- auth ----
+$("#signupBtn").addEventListener("click", async ()=>{
+  if(!sb) return;
+  const email=$("#authEmail").value.trim(), password=$("#authPass").value;
+  if(!email||!password){ toast("Enter email and password","err"); return; }
+  const { error } = await sb.auth.signUp({email, password});
+  if(error){ toast("Sign up failed: "+error.message,"err"); return; }
+  toast("Account created — check email if confirmation is required, then Log in","ok");
+});
+$("#loginBtn").addEventListener("click", async ()=>{
+  if(!sb) return;
+  const email=$("#authEmail").value.trim(), password=$("#authPass").value;
+  if(!email||!password){ toast("Enter email and password","err"); return; }
+  const { data, error } = await sb.auth.signInWithPassword({email, password});
+  if(error){ toast("Login failed: "+error.message,"err"); return; }
+  cloudUser = data.user;
+  toast("Logged in ✓ — syncing…","ok");
+  await pullFromCloud();
+  refreshCloudUI();
+});
+$("#cloudLogoutBtn").addEventListener("click", async ()=>{
+  if(sb) await sb.auth.signOut();
+  cloudUser=null; refreshCloudUI();
+  toast("Logged out");
+});
+
+// ---- sync ----
+$("#syncNowBtn").addEventListener("click", async ()=>{ await pullFromCloud(); toast("Synced ✓","ok"); refreshStats(); renderAll(); });
+$("#pushLocalBtn").addEventListener("click", async ()=>{
+  if(!confirm("Upload ALL data on this device to the cloud? (Merges with what's already there.)")) return;
+  await pushAllToCloud(); toast("Uploaded to cloud ✓","ok");
+});
+$("#copySqlBtn").addEventListener("click", ()=>{
+  navigator.clipboard.writeText(SETUP_SQL).then(()=> toast("SQL copied ✓","ok"));
+});
+
+// Push one record/file to cloud (called after local save). Silent if not logged in.
+async function cloudUpsertRate(rec){
+  if(!sb || !cloudUser) return;
+  try{ await sb.from("rates").upsert({ id:rec.id, data:rec, updated_at:new Date().toISOString() }); }catch(e){ console.error(e); }
+}
+async function cloudUpsertFile(f){
+  if(!sb || !cloudUser) return;
+  try{ await sb.from("files").upsert({ id:f.id, data:f }); }catch(e){ console.error(e); }
+}
+async function cloudDeleteRate(id){ if(sb&&cloudUser){ try{ await sb.from("rates").delete().eq("id",id);}catch(e){console.error(e);} } }
+async function cloudDeleteFile(id){ if(sb&&cloudUser){ try{ await sb.from("files").delete().eq("id",id);}catch(e){console.error(e);} } }
+
+// Pull everything from cloud into local IndexedDB (cloud is source of truth on login)
+async function pullFromCloud(){
+  if(!sb || !cloudUser) return;
+  try{
+    const { data:rates } = await sb.from("rates").select("data");
+    const { data:files } = await sb.from("files").select("data");
+    if(rates) for(const row of rates){ if(row.data) await put("rates", row.data); }
+    if(files) for(const row of files){ if(row.data) await put("files", row.data); }
+    await refreshStats(); await refreshCompanyList();
+  }catch(e){ console.error(e); toast("Sync read failed — is the SQL setup done?","err"); }
+}
+
+// Push all local data up to cloud (first-time upload)
+async function pushAllToCloud(){
+  if(!sb || !cloudUser) return;
+  const rates = await getAll("rates");
+  const files = await getAll("files");
+  for(const r of rates) await cloudUpsertRate(r);
+  for(const f of files) await cloudUpsertFile(f);
+}
+
+async function refreshCloudUI(){
+  // fill config inputs if saved
+  const cfg = cloudCfg();
+  if(cfg){ $("#cfgUrl").value = cfg.url||""; $("#cfgKey").value = cfg.key||""; }
+
+  if(!cfg){ setCloudStatus("☁️ Cloud: not connected"); showCloudSection("setup"); $("#cloudLogoutBtn").style.display="none"; return; }
+  if(!sb) initSupabase();
+  if(!sb){ setCloudStatus("☁️ Cloud: error","err"); showCloudSection("setup"); return; }
+
+  // check session
+  try{
+    const { data } = await sb.auth.getUser();
+    cloudUser = data && data.user ? data.user : null;
+  }catch(e){ cloudUser=null; }
+
+  if(cloudUser){
+    setCloudStatus("☁️ Synced: "+(cloudUser.email||"signed in"),"ok");
+    $("#cloudLogoutBtn").style.display="";
+    $("#cloudSyncedMsg").textContent = "✅ Signed in as "+(cloudUser.email||"")+". Your data syncs automatically on save.";
+    showCloudSection("synced");
+  } else {
+    setCloudStatus("☁️ Connected — please log in");
+    $("#cloudLogoutBtn").style.display="none";
+    showCloudSection("auth");
+  }
+}
 
 /* ============================================================
    INIT
@@ -1725,6 +1981,12 @@ $("#fixAllBtn").addEventListener("click", async ()=>{
     await refreshStats();
     await refreshCompanyList();
     $("#fYear").value = new Date().getFullYear();
+    $("#sqlScript").textContent = SETUP_SQL;
+    // set up cloud (if previously configured) and pull latest
+    initSupabase();
+    await refreshCloudUI();
+    if(cloudUser) await pullFromCloud();
+    renderAll();
   }catch(err){
     console.error(err);
     alert("Could not open local storage. Please use a modern browser (Chrome, Edge, Firefox, Safari).");
