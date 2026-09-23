@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Travel Rate Manager — AED Rate Storage</title>
+
+<!-- Libraries loaded from CDN. First run needs internet to cache them; after that the browser caches them.
+     OCR: Tesseract.js  |  PDF rendering: PDF.js -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+</script>
+
+<style>
+  :root{
+    --bg:#0f172a;
+    --bg-soft:#111c33;
+    --card:#ffffff;
+    --ink:#1e293b;
+    --muted:#64748b;
+    --line:#e2e8f0;
+    --brand:#0ea5e9;
+    --brand-d:#0369a1;
+    --accent:#f59e0b;
+    --green:#10b981;
+    --red:#ef4444;
+    --radius:16px;
+    --shadow:0 10px 30px rgba(2,20,45,.12);
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; color:var(--ink);
+    background:linear-gradient(180deg,#0b2545 0%,#0e2a4d 45%,#0f3057 100%);
+    min-height:100vh;
+  }
+  header.app{
+    padding:26px 20px 22px; text-align:center; color:#fff;
+  }
+  header.app h1{margin:0; font-size:26px; letter-spacing:.3px}
+  header.app p{margin:6px 0 0; color:#bcd7ee; font-size:14px}
+  .badge-cur{
+    display:inline-block; margin-top:10px; background:rgba(255,255,255,.12);
+    border:1px solid rgba(255,255,255,.25); color:#fff; padding:4px 12px;
+    border-radius:999px; font-size:12px; font-weight:600; letter-spacing:.5px;
+  }
+  .wrap{max-width:1100px; margin:0 auto; padding:0 16px 60px}
+
+  .tabs{
+    display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin:8px 0 22px;
+  }
+  .tabs button{
+    background:rgba(255,255,255,.10); color:#e6f1fb; border:1px solid rgba(255,255,255,.18);
+    padding:10px 18px; border-radius:999px; cursor:pointer; font-size:14px; font-weight:600;
+    transition:.15s;
+  }
+  .tabs button:hover{background:rgba(255,255,255,.2)}
+  .tabs button.active{background:#fff; color:var(--brand-d); border-color:#fff}
+
+  .card{
+    background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow);
+    padding:22px; margin-bottom:20px;
+  }
+  .card h2{margin:0 0 4px; font-size:18px}
+  .card .sub{color:var(--muted); font-size:13px; margin:0 0 18px}
+
+  .panel{display:none}
+  .panel.active{display:block}
+
+  label{display:block; font-size:13px; font-weight:600; margin:0 0 6px; color:#334155}
+  input, select, textarea{
+    width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:10px;
+    font-size:14px; color:var(--ink); background:#fff; outline:none;
+  }
+  input:focus, select:focus, textarea:focus{border-color:var(--brand); box-shadow:0 0 0 3px rgba(14,165,233,.15)}
+  .grid{display:grid; gap:14px}
+  .grid.cols-3{grid-template-columns:2fr 1fr 1fr}
+  .grid.cols-2{grid-template-columns:1fr 1fr}
+  @media (max-width:720px){ .grid.cols-3,.grid.cols-2{grid-template-columns:1fr} }
+
+  .drop{
+    border:2px dashed #b6c6d6; border-radius:14px; padding:26px; text-align:center;
+    color:var(--muted); cursor:pointer; transition:.15s; background:#f8fafc;
+  }
+  .drop:hover{border-color:var(--brand); background:#f0f9ff; color:var(--brand-d)}
+  .drop strong{color:var(--brand-d)}
+  .drop.small{padding:16px}
+
+  .btn{
+    display:inline-flex; align-items:center; gap:8px; border:none; cursor:pointer;
+    padding:11px 18px; border-radius:10px; font-size:14px; font-weight:700; transition:.15s;
+  }
+  .btn.primary{background:var(--brand); color:#fff}
+  .btn.primary:hover{background:var(--brand-d)}
+  .btn.ghost{background:#eef2f7; color:#334155}
+  .btn.ghost:hover{background:#e2e8f0}
+  .btn.green{background:var(--green); color:#fff}
+  .btn.green:hover{filter:brightness(.95)}
+  .btn.danger{background:#fee2e2; color:#b91c1c}
+  .btn.danger:hover{background:#fecaca}
+  .btn.sm{padding:7px 12px; font-size:13px}
+  .btn:disabled{opacity:.55; cursor:not-allowed}
+
+  .row-actions{display:flex; gap:10px; flex-wrap:wrap; margin-top:16px}
+
+  .progress{margin-top:14px; display:none}
+  .progress.show{display:block}
+  .bar{height:8px; background:#e2e8f0; border-radius:999px; overflow:hidden}
+  .bar > i{display:block; height:100%; width:0%; background:var(--brand); transition:width .2s}
+  .progress .lbl{font-size:12px; color:var(--muted); margin-top:6px}
+
+  table{width:100%; border-collapse:collapse; font-size:14px}
+  th,td{padding:10px 10px; text-align:left; border-bottom:1px solid var(--line); vertical-align:middle}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted)}
+  tbody tr:hover{background:#f8fafc}
+  td.num,th.num{text-align:right}
+
+  .rate-input{padding:8px 10px}
+  .chip{
+    display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700;
+    background:#e0f2fe; color:#0369a1;
+  }
+  .chip.month{background:#fef3c7; color:#92400e}
+  .chip.year{background:#dcfce7; color:#166534}
+  .muted{color:var(--muted)}
+  .empty{
+    text-align:center; padding:34px; color:var(--muted); font-size:14px;
+  }
+  .file-pill{
+    display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
+    background:#f1f5f9; color:#334155; padding:5px 10px; border-radius:8px; cursor:pointer;
+    border:1px solid var(--line);
+  }
+  .file-pill:hover{background:#e2e8f0}
+
+  .search-bar{position:relative}
+  .search-bar input{padding-left:40px; font-size:16px}
+  .search-bar svg{position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--muted)}
+
+  .company-card{
+    border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; background:#fff;
+  }
+  .company-card .top{display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap}
+  .company-card h3{margin:0; font-size:17px; color:var(--brand-d)}
+  .company-card .count{font-size:12px; color:var(--muted)}
+
+  .toast{
+    position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px);
+    background:#0f172a; color:#fff; padding:12px 20px; border-radius:12px; font-size:14px;
+    box-shadow:var(--shadow); opacity:0; pointer-events:none; transition:.25s; z-index:60;
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+  .toast.ok{background:#065f46}
+  .toast.err{background:#7f1d1d}
+
+  .stat-row{display:flex; gap:12px; flex-wrap:wrap; margin-bottom:20px}
+  .stat{
+    flex:1; min-width:150px; background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18);
+    border-radius:14px; padding:14px 16px; color:#fff;
+  }
+  .stat .n{font-size:24px; font-weight:800}
+  .stat .t{font-size:12px; color:#bcd7ee; margin-top:2px}
+
+  .modal{
+    position:fixed; inset:0; background:rgba(2,20,45,.6); display:none;
+    align-items:center; justify-content:center; padding:20px; z-index:70;
+  }
+  .modal.show{display:flex}
+  .modal .box{
+    background:#fff; border-radius:16px; max-width:820px; width:100%; max-height:90vh;
+    overflow:auto; padding:0;
+  }
+  .modal .box .head{display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid var(--line); position:sticky; top:0; background:#fff}
+  .modal .box .body{padding:16px 20px}
+  .modal img, .modal iframe{max-width:100%; border-radius:10px; border:1px solid var(--line)}
+  .x{background:none; border:none; font-size:22px; cursor:pointer; color:var(--muted)}
+
+  .preview-thumb{max-width:100%; max-height:220px; border-radius:10px; border:1px solid var(--line); margin-top:12px}
+  .hint{font-size:12px; color:var(--muted); margin-top:8px; line-height:1.5}
+  .hint code{background:#f1f5f9; padding:1px 5px; border-radius:4px}
+</style>
+</head>
+<body>
+
+<header class="app">
+  <h1>✈️ Travel Rate Manager</h1>
+  <p>Store, read &amp; search travel-agency rates — from screenshots &amp; PDFs</p>
+  <span class="badge-cur">Currency: AED (د.إ)</span>
+</header>
+
+<div class="wrap">
+
+  <div class="stat-row" id="statRow">
+    <div class="stat"><div class="n" id="stCompanies">0</div><div class="t">Companies</div></div>
+    <div class="stat"><div class="n" id="stEntries">0</div><div class="t">Rate entries</div></div>
+    <div class="stat"><div class="n" id="stFiles">0</div><div class="t">Files stored</div></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="add">➕ Add Rates</button>
+    <button class="tab-btn" data-tab="search">🔍 Search Company</button>
+    <button class="tab-btn" data-tab="all">📋 All Records</button>
+    <button class="tab-btn" data-tab="backup">💾 Backup</button>
+  </div>
+
+  <!-- ADD PANEL -->
+  <section class="panel active" id="panel-add">
+    <div class="card">
+      <h2>Upload a screenshot or PDF</h2>
+      <p class="sub">Pick the rate sheet a company sent you. We read the rates automatically — then you confirm before saving.</p>
+
+      <div class="drop" id="drop">
+        <div style="font-size:34px">🖼️ / 📄</div>
+        <p style="margin:8px 0 0">Click to choose or drop a <strong>screenshot (PNG/JPG)</strong> or <strong>PDF</strong> here</p>
+        <p class="muted" style="margin:6px 0 0; font-size:12px">The original file is kept in storage too.</p>
+      </div>
+      <input type="file" id="fileInput" accept="image/*,application/pdf" style="display:none" />
+
+      <img id="previewImg" class="preview-thumb" style="display:none" alt="preview" />
+
+      <div class="progress" id="ocrProgress">
+        <div class="bar"><i id="ocrBar"></i></div>
+        <div class="lbl" id="ocrLabel">Reading…</div>
+      </div>
+    </div>
+
+    <div class="card" id="reviewCard" style="display:none">
+      <h2>Review &amp; save rates</h2>
+      <p class="sub">Fill in the company &amp; month, then check the rates the reader found. Edit anything that's off, add or remove rows, then save.</p>
+
+      <div class="grid cols-3" style="margin-bottom:16px">
+        <div>
+          <label>Company name</label>
+          <input id="fCompany" list="companyList" placeholder="e.g. Akbar Travel" autocomplete="off" />
+          <datalist id="companyList"></datalist>
+        </div>
+        <div>
+          <label>Month</label>
+          <select id="fMonth">
+            <option value="">Select…</option>
+            <option>January</option><option>February</option><option>March</option>
+            <option>April</option><option>May</option><option>June</option>
+            <option>July</option><option>August</option><option>September</option>
+            <option>October</option><option>November</option><option>December</option>
+          </select>
+        </div>
+        <div>
+          <label>Year</label>
+          <input id="fYear" type="number" min="2000" max="2100" />
+        </div>
+      </div>
+
+      <table id="rateTable">
+        <thead>
+          <tr>
+            <th style="width:55%">Item / Description</th>
+            <th class="num" style="width:30%">Rate (AED)</th>
+            <th style="width:15%"></th>
+          </tr>
+        </thead>
+        <tbody id="rateBody"></tbody>
+      </table>
+
+      <div class="row-actions">
+        <button class="btn ghost sm" id="addRowBtn">＋ Add row</button>
+      </div>
+
+      <div>
+        <label style="margin-top:16px">Notes (optional)</label>
+        <textarea id="fNotes" rows="2" placeholder="Any extra detail about this offer…"></textarea>
+      </div>
+
+      <div class="row-actions">
+        <button class="btn green" id="saveBtn">💾 Save these rates</button>
+        <button class="btn ghost" id="cancelBtn">Cancel</button>
+      </div>
+      <p class="hint" id="rawTextToggle" style="cursor:pointer">▸ Show raw text the reader extracted</p>
+      <pre id="rawText" style="display:none; white-space:pre-wrap; background:#f8fafc; padding:12px; border-radius:10px; font-size:12px; max-height:200px; overflow:auto"></pre>
+    </div>
+  </section>
+
+  <!-- SEARCH PANEL -->
+  <section class="panel" id="panel-search">
+    <div class="card">
+      <h2>Search a company</h2>
+      <p class="sub">Type a company name to see every rate &amp; month you've offered them.</p>
+      <div class="search-bar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input id="searchInput" placeholder="e.g. Akbar Travel" autocomplete="off" />
+      </div>
+    </div>
+    <div id="searchResults"></div>
+  </section>
+
+  <!-- ALL RECORDS PANEL -->
+  <section class="panel" id="panel-all">
+    <div class="card">
+      <h2>All records</h2>
+      <p class="sub">Everything you've stored, newest first.</p>
+      <div id="allRecords"></div>
+    </div>
+  </section>
+
+  <!-- BACKUP PANEL -->
+  <section class="panel" id="panel-backup">
+    <div class="card">
+      <h2>Backup &amp; restore</h2>
+      <p class="sub">Your data lives in this browser. Export a backup file regularly to keep it safe for years — and to move it to another computer.</p>
+      <div class="row-actions">
+        <button class="btn primary" id="exportBtn">⬇️ Export backup (.json)</button>
+        <button class="btn ghost" id="importBtn">⬆️ Import backup</button>
+        <input type="file" id="importInput" accept="application/json,.json" style="display:none" />
+      </div>
+      <p class="hint">
+        The backup includes all companies, rates <strong>and</strong> the original screenshots/PDFs.
+        Keep it somewhere safe (cloud drive, USB). To restore, click <em>Import backup</em> and pick the file.
+      </p>
+      <hr style="border:none; border-top:1px solid var(--line); margin:18px 0" />
+      <button class="btn danger sm" id="wipeBtn">🗑️ Erase all data</button>
+    </div>
+  </section>
+
+</div>
+
+<!-- File viewer modal -->
+<div class="modal" id="fileModal">
+  <div class="box">
+    <div class="head">
+      <strong id="modalTitle">File</strong>
+      <button class="x" id="modalClose">×</button>
+    </div>
+    <div class="body" id="modalBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   Travel Rate Manager — all logic (offline, browser-only)
+   Storage: IndexedDB (rates + original files)
+   ============================================================ */
+
+const DB_NAME = "travelRatesDB";
+const DB_VER = 1;
+let db;
+
+/* ---------- IndexedDB helpers ---------- */
+function openDB(){
+  return new Promise((resolve, reject)=>{
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onupgradeneeded = e=>{
+      const d = e.target.result;
+      if(!d.objectStoreNames.contains("rates")){
+        const s = d.createObjectStore("rates", {keyPath:"id"});
+        s.createIndex("company", "companyLower", {unique:false});
+      }
+      if(!d.objectStoreNames.contains("files")){
+        d.createObjectStore("files", {keyPath:"id"});
+      }
+    };
+    req.onsuccess = e=>{ db = e.target.result; resolve(db); };
+    req.onerror = e=> reject(e.target.error);
+  });
+}
+function tx(store, mode="readonly"){ return db.transaction(store, mode).objectStore(store); }
+function put(store, val){ return new Promise((res,rej)=>{const r=tx(store,"readwrite").put(val); r.onsuccess=()=>res(); r.onerror=e=>rej(e.target.error);}); }
+function getAll(store){ return new Promise((res,rej)=>{const r=tx(store).getAll(); r.onsuccess=()=>res(r.result); r.onerror=e=>rej(e.target.error);}); }
+function getOne(store,key){ return new Promise((res,rej)=>{const r=tx(store).get(key); r.onsuccess=()=>res(r.result); r.onerror=e=>rej(e.target.error);}); }
+function del(store,key){ return new Promise((res,rej)=>{const r=tx(store,"readwrite").delete(key); r.onsuccess=()=>res(); r.onerror=e=>rej(e.target.error);}); }
+function clearStore(store){ return new Promise((res,rej)=>{const r=tx(store,"readwrite").clear(); r.onsuccess=()=>res(); r.onerror=e=>rej(e.target.error);}); }
+
+/* ---------- Small utilities ---------- */
+const $ = sel => document.querySelector(sel);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+function toast(msg, type=""){
+  const t = $("#toast"); t.textContent = msg; t.className = "toast show " + type;
+  setTimeout(()=> t.className = "toast " + type, 2600);
+}
+function esc(s){ return (s??"").toString().replace(/[&<>"]/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function fmtAED(n){
+  const num = Number(n);
+  if(isNaN(num)) return esc(n);
+  return num.toLocaleString("en-AE",{minimumFractionDigits:0, maximumFractionDigits:2});
+}
+
+/* ---------- Tabs ---------- */
+document.querySelectorAll(".tab-btn").forEach(b=>{
+  b.addEventListener("click", ()=>{
+    document.querySelectorAll(".tab-btn").forEach(x=>x.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active");
+    $("#panel-"+b.dataset.tab).classList.add("active");
+    if(b.dataset.tab==="all") renderAll();
+    if(b.dataset.tab==="search") { renderSearch($("#searchInput").value); refreshCompanyList(); }
+  });
+});
+
+/* ============================================================
+   FILE UPLOAD + OCR
+   ============================================================ */
+let pendingFile = null;      // {blob, name, type}
+let pendingDataURL = null;   // for image preview / storage
+
+const drop = $("#drop");
+const fileInput = $("#fileInput");
+drop.addEventListener("click", ()=> fileInput.click());
+["dragover","dragenter"].forEach(ev=> drop.addEventListener(ev, e=>{e.preventDefault(); drop.style.background="#e0f2fe";}));
+["dragleave","drop"].forEach(ev=> drop.addEventListener(ev, e=>{e.preventDefault(); drop.style.background="";}));
+drop.addEventListener("drop", e=>{ if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener("change", e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); });
+
+function setProgress(show, pct, label){
+  const p = $("#ocrProgress");
+  p.classList.toggle("show", show);
+  if(pct!=null) $("#ocrBar").style.width = pct + "%";
+  if(label!=null) $("#ocrLabel").textContent = label;
+}
+
+async function handleFile(file){
+  const isPDF = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+  const isImg = file.type.startsWith("image/");
+  if(!isPDF && !isImg){ toast("Please choose an image or PDF","err"); return; }
+
+  pendingFile = { name:file.name, type:file.type || (isPDF?"application/pdf":"image/*") };
+
+  // keep the original file as a data URL so we can store & re-view it
+  pendingDataURL = await fileToDataURL(file);
+  pendingFile.dataURL = pendingDataURL;
+
+  // preview
+  const img = $("#previewImg");
+  if(isImg){ img.src = pendingDataURL; img.style.display="block"; }
+  else { img.style.display="none"; }
+
+  $("#reviewCard").style.display = "none";
+  setProgress(true, 5, "Preparing…");
+
+  try{
+    let text = "";
+    if(isImg){
+      text = await ocrImage(pendingDataURL);
+    } else {
+      text = await ocrPDF(pendingDataURL);
+    }
+    setProgress(false);
+    openReview(text);
+  }catch(err){
+    console.error(err);
+    setProgress(false);
+    toast("Couldn't read the file automatically — you can still enter rates manually.","err");
+    openReview(""); // still let them fill manually
+  }
+}
+
+function fileToDataURL(file){
+  return new Promise((res,rej)=>{
+    const r = new FileReader();
+    r.onload = ()=> res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+async function ocrImage(dataURL){
+  setProgress(true, 10, "Reading image…");
+  const { data } = await Tesseract.recognize(dataURL, "eng", {
+    logger: m=>{
+      if(m.status==="recognizing text") setProgress(true, 15 + Math.round(m.progress*80), "Reading image… "+Math.round(m.progress*100)+"%");
+    }
+  });
+  return data.text;
+}
+
+async function ocrPDF(dataURL){
+  setProgress(true, 10, "Opening PDF…");
+  const base64 = dataURL.split(",")[1];
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++) arr[i]=raw.charCodeAt(i);
+
+  const pdf = await pdfjsLib.getDocument({data:arr}).promise;
+  let fullText = "";
+
+  for(let p=1; p<=pdf.numPages; p++){
+    const page = await pdf.getPage(p);
+
+    // 1) try to grab embedded text (fast + accurate for digital PDFs)
+    const tc = await page.getTextContent();
+    const embedded = tc.items.map(i=>i.str).join(" ").trim();
+    if(embedded.length > 30){
+      fullText += embedded + "\n";
+      setProgress(true, 10 + Math.round((p/pdf.numPages)*80), `Read page ${p}/${pdf.numPages}`);
+      continue;
+    }
+
+    // 2) otherwise render to canvas and OCR it (scanned PDFs)
+    const viewport = page.getViewport({scale:2});
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width; canvas.height = viewport.height;
+    await page.render({canvasContext:canvas.getContext("2d"), viewport}).promise;
+    const { data } = await Tesseract.recognize(canvas, "eng", {
+      logger: m=>{ if(m.status==="recognizing text") setProgress(true, 10+Math.round(((p-1+m.progress)/pdf.numPages)*80), `OCR page ${p}/${pdf.numPages}… ${Math.round(m.progress*100)}%`); }
+    });
+    fullText += data.text + "\n";
+  }
+  return fullText;
+}
+
+/* ---------- Parse extracted text into rate rows ----------
+   Strategy: on each line, find every number token. Travel rate sheets
+   list the description first and the price last, so we take the LAST
+   number on the line as the rate and use the text before it as the
+   description. We skip header/date lines and obvious noise. The user
+   reviews & edits everything before saving, so we favour catching
+   candidates over being perfectly strict. */
+function parseRates(text){
+  const rows = [];
+  const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+
+  // A number token: 1,200 | 1200 | 2750.50 | 350  (with optional currency word)
+  const tokenRe = /(?:aed|dhs?|د\.إ)?\s*(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\s*(?:aed|dhs?)?/gi;
+  const monthWords = /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
+
+  for(const line of lines){
+    // skip lines that are clearly headers/notes with no price intent
+    if(/^(note|notes|valid|terms|subject|rates?|price list|dear|regards|thank)/i.test(line)) continue;
+    // skip title/header lines like "... 2026 Rates" or "Rate Sheet"
+    if(/\b(rates?|rate sheet|price list|tariff|quotation)\b\s*$/i.test(line)) continue;
+    // skip page-number lines like "Page 1", "Pg 2 of 5"
+    if(/^p(a?ge?)\b/i.test(line)) continue;
+
+    const matches = [...line.matchAll(tokenRe)];
+    if(matches.length === 0) continue;
+
+    // choose the last numeric token on the line as the price
+    const last = matches[matches.length - 1];
+    const rawNum = last[1].replace(/,/g, "");
+    const val = parseFloat(rawNum);
+    if(isNaN(val)) continue;
+
+    // description = everything before that last number token
+    let desc = line.slice(0, last.index).trim();
+    // tidy trailing/leading separators and currency words
+    desc = desc.replace(/\b(aed|dhs?)\b/gi, "")
+               .replace(/[:\-–—|=.]+$/,"")
+               .replace(/^[:\-–—|=.]+/,"")
+               .replace(/\s{2,}/g," ")
+               .trim();
+
+    // If the last number looks like a year AND the line mentions a month,
+    // it's a date header (e.g. "... September 2026"), not a rate — skip it.
+    if(val >= 1990 && val <= 2100 && monthWords.test(line)) continue;
+
+    // Skip standalone tiny numbers with no description (likely page numbers / noise)
+    if(!desc && val < 50) continue;
+    // Skip 4-digit values that look like a year when there's no description
+    if(!desc && val >= 1990 && val <= 2100) continue;
+    if(!desc) desc = "Item";
+
+    rows.push({desc, rate: val});
+  }
+  return rows;
+}
+
+/* ---------- Review form ---------- */
+function openReview(text){
+  $("#reviewCard").style.display = "block";
+  $("#rawText").textContent = text || "(no text detected)";
+  $("#rawText").style.display = "none";
+  $("#rawTextToggle").textContent = "▸ Show raw text the reader extracted";
+
+  // default year = current
+  if(!$("#fYear").value) $("#fYear").value = new Date().getFullYear();
+
+  const rows = parseRates(text);
+  const body = $("#rateBody");
+  body.innerHTML = "";
+  if(rows.length===0){
+    addRateRow("", "");
+  } else {
+    rows.forEach(r=> addRateRow(r.desc, r.rate));
+  }
+  refreshCompanyList();
+  $("#reviewCard").scrollIntoView({behavior:"smooth"});
+  if(rows.length) toast(`Found ${rows.length} possible rate${rows.length>1?"s":""} — please review`,"ok");
+}
+
+function addRateRow(desc="", rate=""){
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><input class="rate-input desc" value="${esc(desc)}" placeholder="e.g. Economy ticket / Visa fee" /></td>
+    <td class="num"><input class="rate-input amt" type="number" step="0.01" value="${rate===""?"":esc(rate)}" placeholder="0.00" style="text-align:right" /></td>
+    <td><button class="btn danger sm rm">Remove</button></td>`;
+  tr.querySelector(".rm").addEventListener("click", ()=> tr.remove());
+  $("#rateBody").appendChild(tr);
+}
+$("#addRowBtn").addEventListener("click", ()=> addRateRow());
+$("#rawTextToggle").addEventListener("click", ()=>{
+  const el = $("#rawText");
+  const show = el.style.display==="none";
+  el.style.display = show ? "block":"none";
+  $("#rawTextToggle").textContent = (show?"▾ Hide":"▸ Show") + " raw text the reader extracted";
+});
+$("#cancelBtn").addEventListener("click", resetAddForm);
+
+function resetAddForm(){
+  $("#reviewCard").style.display="none";
+  $("#previewImg").style.display="none";
+  $("#fCompany").value=""; $("#fMonth").value=""; $("#fNotes").value="";
+  $("#rateBody").innerHTML="";
+  pendingFile=null; pendingDataURL=null;
+  fileInput.value="";
+}
+
+/* ---------- Save ---------- */
+$("#saveBtn").addEventListener("click", async ()=>{
+  const company = $("#fCompany").value.trim();
+  const month = $("#fMonth").value;
+  const year = $("#fYear").value.trim();
+  if(!company){ toast("Please enter a company name","err"); $("#fCompany").focus(); return; }
+  if(!month){ toast("Please select a month","err"); return; }
+
+  const rates = [];
+  $("#rateBody").querySelectorAll("tr").forEach(tr=>{
+    const desc = tr.querySelector(".desc").value.trim();
+    const amt = tr.querySelector(".amt").value.trim();
+    if(desc || amt) rates.push({desc: desc||"Item", rate: amt===""? null : parseFloat(amt)});
+  });
+  if(rates.length===0){ toast("Add at least one rate","err"); return; }
+
+  let fileId = null;
+  if(pendingFile && pendingDataURL){
+    fileId = uid();
+    await put("files", { id:fileId, name:pendingFile.name, type:pendingFile.type, dataURL:pendingDataURL });
+  }
+
+  const record = {
+    id: uid(),
+    company, companyLower: company.toLowerCase(),
+    month, year, currency:"AED",
+    rates,
+    notes: $("#fNotes").value.trim(),
+    fileId,
+    fileName: pendingFile ? pendingFile.name : null,
+    createdAt: Date.now()
+  };
+  await put("rates", record);
+  toast("Saved ✔  "+company+" · "+month+" "+year, "ok");
+  resetAddForm();
+  refreshStats();
+  refreshCompanyList();
+});
+
+/* ============================================================
+   SEARCH
+   ============================================================ */
+$("#searchInput").addEventListener("input", e=> renderSearch(e.target.value));
+
+async function renderSearch(query){
+  const box = $("#searchResults");
+  const q = (query||"").trim().toLowerCase();
+  const all = await getAll("rates");
+  if(all.length===0){ box.innerHTML = card(`<div class="empty">No records yet. Add some from the <strong>Add Rates</strong> tab.</div>`); return; }
+  if(!q){ box.innerHTML = card(`<div class="empty">Start typing a company name above ☝️</div>`); return; }
+
+  const matches = all.filter(r=> r.companyLower.includes(q));
+  if(matches.length===0){ box.innerHTML = card(`<div class="empty">No company matches "<strong>${esc(query)}</strong>".</div>`); return; }
+
+  // group by company
+  const groups = {};
+  matches.forEach(r=> (groups[r.company] = groups[r.company]||[]).push(r));
+
+  let html = "";
+  Object.keys(groups).sort().forEach(comp=>{
+    const recs = groups[comp].sort((a,b)=> b.createdAt-a.createdAt);
+    html += `<div class="company-card">
+      <div class="top">
+        <h3>🏢 ${esc(comp)}</h3>
+        <span class="count">${recs.length} rate entr${recs.length>1?"ies":"y"}</span>
+      </div>
+      <div style="margin-top:12px">${recs.map(recordBlock).join("")}</div>
+    </div>`;
+  });
+  box.innerHTML = html;
+  attachRecordHandlers(box);
+}
+
+/* ============================================================
+   ALL RECORDS
+   ============================================================ */
+async function renderAll(){
+  const box = $("#allRecords");
+  const all = (await getAll("rates")).sort((a,b)=> b.createdAt-a.createdAt);
+  if(all.length===0){ box.innerHTML = `<div class="empty">No records yet. Add some from the <strong>Add Rates</strong> tab.</div>`; return; }
+  box.innerHTML = all.map(r=> `<div class="company-card">
+      <div class="top"><h3>🏢 ${esc(r.company)}</h3></div>
+      <div style="margin-top:12px">${recordBlock(r)}</div>
+    </div>`).join("");
+  attachRecordHandlers(box);
+}
+
+/* ---------- Shared record renderer ---------- */
+function recordBlock(r){
+  const rateRows = r.rates.map(x=>`
+    <tr><td>${esc(x.desc)}</td><td class="num">${x.rate==null?"—":"AED "+fmtAED(x.rate)}</td></tr>`).join("");
+  const fileBtn = r.fileId
+    ? `<span class="file-pill view-file" data-file="${r.fileId}" data-name="${esc(r.fileName||"file")}">📎 ${esc(r.fileName||"View file")}</span>`
+    : `<span class="muted" style="font-size:12px">No file attached</span>`;
+  return `<div style="border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:12px">
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px">
+      <span class="chip month">${esc(r.month)}</span>
+      <span class="chip year">${esc(r.year||"")}</span>
+      <span class="chip">AED</span>
+      <span style="flex:1"></span>
+      ${fileBtn}
+      <button class="btn danger sm del-rec" data-id="${r.id}" data-file="${r.fileId||""}">Delete</button>
+    </div>
+    <table><thead><tr><th>Item</th><th class="num">Rate</th></tr></thead><tbody>${rateRows}</tbody></table>
+    ${r.notes? `<p class="hint">📝 ${esc(r.notes)}</p>`:""}
+  </div>`;
+}
+
+function attachRecordHandlers(scope){
+  scope.querySelectorAll(".view-file").forEach(el=>{
+    el.addEventListener("click", ()=> viewFile(el.dataset.file, el.dataset.name));
+  });
+  scope.querySelectorAll(".del-rec").forEach(el=>{
+    el.addEventListener("click", async ()=>{
+      if(!confirm("Delete this rate entry?")) return;
+      await del("rates", el.dataset.id);
+      if(el.dataset.file) await del("files", el.dataset.file);
+      toast("Deleted");
+      refreshStats();
+      renderSearch($("#searchInput").value);
+      renderAll();
+    });
+  });
+}
+
+/* ---------- File viewer ---------- */
+async function viewFile(fileId, name){
+  const f = await getOne("files", fileId);
+  if(!f){ toast("File not found","err"); return; }
+  $("#modalTitle").textContent = name || f.name;
+  const body = $("#modalBody");
+  if(f.type==="application/pdf"){
+    body.innerHTML = `<iframe src="${f.dataURL}" style="width:100%; height:70vh"></iframe>
+      <p style="margin-top:10px"><a class="btn primary sm" href="${f.dataURL}" download="${esc(f.name)}">⬇️ Download</a></p>`;
+  } else {
+    body.innerHTML = `<img src="${f.dataURL}" alt="${esc(f.name)}" />
+      <p style="margin-top:10px"><a class="btn primary sm" href="${f.dataURL}" download="${esc(f.name)}">⬇️ Download</a></p>`;
+  }
+  $("#fileModal").classList.add("show");
+}
+$("#modalClose").addEventListener("click", ()=> $("#fileModal").classList.remove("show"));
+$("#fileModal").addEventListener("click", e=>{ if(e.target.id==="fileModal") $("#fileModal").classList.remove("show"); });
+
+/* ============================================================
+   STATS + company autocomplete
+   ============================================================ */
+async function refreshStats(){
+  const all = await getAll("rates");
+  const files = await getAll("files");
+  const companies = new Set(all.map(r=>r.companyLower));
+  $("#stCompanies").textContent = companies.size;
+  $("#stEntries").textContent = all.length;
+  $("#stFiles").textContent = files.length;
+}
+async function refreshCompanyList(){
+  const all = await getAll("rates");
+  const names = [...new Set(all.map(r=>r.company))].sort();
+  $("#companyList").innerHTML = names.map(n=>`<option value="${esc(n)}">`).join("");
+}
+
+/* ============================================================
+   BACKUP / RESTORE
+   ============================================================ */
+$("#exportBtn").addEventListener("click", async ()=>{
+  const rates = await getAll("rates");
+  const files = await getAll("files");
+  const payload = { app:"TravelRateManager", version:1, exportedAt:new Date().toISOString(), rates, files };
+  const blob = new Blob([JSON.stringify(payload)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `travel-rates-backup-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Backup downloaded ✔","ok");
+});
+
+$("#importBtn").addEventListener("click", ()=> $("#importInput").click());
+$("#importInput").addEventListener("change", async e=>{
+  const file = e.target.files[0]; if(!file) return;
+  try{
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if(data.app!=="TravelRateManager") throw new Error("Not a valid backup");
+    if(!confirm("Import backup? This adds the backup's records to your current data.")) return;
+    for(const r of (data.rates||[])) await put("rates", r);
+    for(const f of (data.files||[])) await put("files", f);
+    toast("Backup imported ✔","ok");
+    refreshStats(); refreshCompanyList(); renderAll();
+  }catch(err){
+    console.error(err); toast("Import failed: "+err.message,"err");
+  }
+  e.target.value="";
+});
+
+$("#wipeBtn").addEventListener("click", async ()=>{
+  if(!confirm("This erases ALL companies, rates and files from this browser. Export a backup first! Continue?")) return;
+  if(!confirm("Are you absolutely sure? This cannot be undone.")) return;
+  await clearStore("rates"); await clearStore("files");
+  toast("All data erased");
+  refreshStats(); refreshCompanyList(); renderAll(); renderSearch("");
+});
+
+/* ============================================================
+   INIT
+   ============================================================ */
+(async function init(){
+  try{
+    await openDB();
+    await refreshStats();
+    await refreshCompanyList();
+    $("#fYear").value = new Date().getFullYear();
+  }catch(err){
+    console.error(err);
+    alert("Could not open local storage. Please use a modern browser (Chrome, Edge, Firefox, Safari).");
+  }
+})();
+</script>
+</body>
+</html>
