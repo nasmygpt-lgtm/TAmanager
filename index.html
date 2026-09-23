@@ -183,6 +183,23 @@
   .preview-thumb{max-width:100%; max-height:220px; border-radius:10px; border:1px solid var(--line); margin-top:12px}
   .hint{font-size:12px; color:var(--muted); margin-top:8px; line-height:1.5}
   .hint code{background:#f1f5f9; padding:1px 5px; border-radius:4px}
+
+  /* Side-by-side review layout */
+  .review-split{display:grid; grid-template-columns:minmax(280px, 420px) 1fr; gap:20px; align-items:start}
+  @media (max-width:900px){ .review-split{grid-template-columns:1fr} }
+  .review-ref{
+    position:sticky; top:12px; border:1px solid var(--line); border-radius:12px;
+    background:#f8fafc; overflow:hidden; align-self:start;
+  }
+  @media (max-width:900px){ .review-ref{position:static} }
+  .review-ref .ref-head{
+    display:flex; justify-content:space-between; align-items:center; gap:8px;
+    padding:8px 10px; border-bottom:1px solid var(--line); background:#eef4fb; font-size:13px; font-weight:700; color:#334155;
+  }
+  .ref-holder{max-height:70vh; overflow:auto; padding:8px; text-align:center}
+  .ref-holder img{max-width:100%; border-radius:8px; cursor:zoom-in}
+  .ref-holder iframe{width:100%; height:60vh; border:none; border-radius:8px}
+  .review-form{min-width:0}
 </style>
 </head>
 <body>
@@ -221,8 +238,6 @@
       </div>
       <input type="file" id="fileInput" accept="image/*,application/pdf" style="display:none" />
 
-      <img id="previewImg" class="preview-thumb" style="display:none" alt="preview" />
-
       <div class="progress" id="ocrProgress">
         <div class="bar"><i id="ocrBar"></i></div>
         <div class="lbl" id="ocrLabel">Reading…</div>
@@ -246,7 +261,22 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
 
     <div class="card" id="reviewCard" style="display:none">
       <h2>Review &amp; save rates</h2>
-      <p class="sub">Fill in the company &amp; month, then check the rates the reader found. Edit anything that's off, add or remove rows, then save.</p>
+      <p class="sub">Check the auto-read rates against the screenshot on the left. Edit anything that's off, then save.</p>
+
+      <div class="review-split">
+        <!-- LEFT: reference screenshot / PDF -->
+        <div class="review-ref" id="reviewRef">
+          <div class="ref-head">
+            <span>📎 Reference</span>
+            <button class="btn ghost sm" id="refZoomBtn" type="button">🔍 Open full size</button>
+          </div>
+          <div id="refHolder" class="ref-holder">
+            <p class="muted" style="text-align:center; padding:20px">No screenshot attached (typed or pasted entry).</p>
+          </div>
+        </div>
+
+        <!-- RIGHT: the editable form -->
+        <div class="review-form">
 
       <div class="grid cols-3" style="margin-bottom:16px">
         <div>
@@ -318,6 +348,9 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
       </div>
       <p class="hint" id="rawTextToggle" style="cursor:pointer">▸ Show raw text the reader extracted</p>
       <pre id="rawText" style="display:none; white-space:pre-wrap; background:#f8fafc; padding:12px; border-radius:10px; font-size:12px; max-height:200px; overflow:auto"></pre>
+
+        </div><!-- /review-form -->
+      </div><!-- /review-split -->
     </div>
   </section>
 
@@ -459,12 +492,16 @@ $("#pasteReadBtn").addEventListener("click", ()=>{
   if(!text){ toast("Paste some rate text first","err"); $("#pasteBox").focus(); return; }
   // pasted text has no attached file
   pendingFile = null; pendingDataURL = null;
-  $("#previewImg").style.display = "none";
   const m = detectMonth(text);
   if(m) $("#fMonth").value = m;   // auto-fill month if we can spot it
   openReview(text);
 });
 $("#pasteClearBtn").addEventListener("click", ()=>{ $("#pasteBox").value = ""; });
+
+/* Open the reference screenshot full-size from the review pane */
+$("#refZoomBtn").addEventListener("click", ()=>{
+  if(pendingFile && pendingDataURL) viewFileData(pendingDataURL, pendingFile.type, pendingFile.name);
+});
 
 function setProgress(show, pct, label){
   const p = $("#ocrProgress");
@@ -483,11 +520,6 @@ async function handleFile(file){
   // keep the original file as a data URL so we can store & re-view it
   pendingDataURL = await fileToDataURL(file);
   pendingFile.dataURL = pendingDataURL;
-
-  // preview
-  const img = $("#previewImg");
-  if(isImg){ img.src = pendingDataURL; img.style.display="block"; }
-  else { img.style.display="none"; }
 
   $("#reviewCard").style.display = "none";
   setProgress(true, 5, "Preparing…");
@@ -668,12 +700,35 @@ function detectMonth(text){
   return m ? map[m[1].toLowerCase()] : "";
 }
 
+/* ---------- Reference pane (side-by-side screenshot) ---------- */
+function renderReferencePane(){
+  const holder = $("#refHolder");
+  const refBox = $("#reviewRef");
+  const zoomBtn = $("#refZoomBtn");
+  if(pendingFile && pendingDataURL){
+    refBox.style.display = "";
+    zoomBtn.style.display = "";
+    if((pendingFile.type||"").indexOf("pdf") !== -1){
+      holder.innerHTML = `<iframe src="${pendingDataURL}"></iframe>`;
+    } else {
+      holder.innerHTML = `<img src="${pendingDataURL}" alt="reference" title="Click to open full size" />`;
+      holder.querySelector("img").addEventListener("click", ()=> viewFileData(pendingDataURL, pendingFile.type, pendingFile.name));
+    }
+  } else {
+    // typed/pasted entry — no screenshot; hide the pane so form uses full width
+    refBox.style.display = "none";
+    zoomBtn.style.display = "none";
+    holder.innerHTML = "";
+  }
+}
+
 /* ---------- Review form ---------- */
 function openReview(text){
   $("#reviewCard").style.display = "block";
   $("#rawText").textContent = text || "(no text detected)";
   $("#rawText").style.display = "none";
   $("#rawTextToggle").textContent = "▸ Show raw text the reader extracted";
+  renderReferencePane();
 
   // default year = current
   if(!$("#fYear").value) $("#fYear").value = new Date().getFullYear();
@@ -725,7 +780,7 @@ $("#cancelBtn").addEventListener("click", resetAddForm);
 
 function resetAddForm(){
   $("#reviewCard").style.display="none";
-  $("#previewImg").style.display="none";
+  $("#refHolder").innerHTML="";
   $("#fCompany").value=""; $("#fMonth").value=""; $("#fNotes").value="";
   $("#fRoomType").value="Deluxe Room"; $("#fPromo").value=""; $("#fAllotment").value="";
   $("#rateBody").innerHTML="";
@@ -901,14 +956,17 @@ function attachRecordHandlers(scope){
 async function viewFile(fileId, name){
   const f = await getOne("files", fileId);
   if(!f){ toast("File not found","err"); return; }
-  $("#modalTitle").textContent = name || f.name;
+  viewFileData(f.dataURL, f.type, name || f.name);
+}
+function viewFileData(dataURL, type, name){
+  $("#modalTitle").textContent = name || "File";
   const body = $("#modalBody");
-  if(f.type==="application/pdf"){
-    body.innerHTML = `<iframe src="${f.dataURL}" style="width:100%; height:70vh"></iframe>
-      <p style="margin-top:10px"><a class="btn primary sm" href="${f.dataURL}" download="${esc(f.name)}">⬇️ Download</a></p>`;
+  if((type||"").indexOf("pdf") !== -1){
+    body.innerHTML = `<iframe src="${dataURL}" style="width:100%; height:70vh"></iframe>
+      <p style="margin-top:10px"><a class="btn primary sm" href="${dataURL}" download="${esc(name||'file')}">⬇️ Download</a></p>`;
   } else {
-    body.innerHTML = `<img src="${f.dataURL}" alt="${esc(f.name)}" />
-      <p style="margin-top:10px"><a class="btn primary sm" href="${f.dataURL}" download="${esc(f.name)}">⬇️ Download</a></p>`;
+    body.innerHTML = `<img src="${dataURL}" alt="${esc(name||'')}" />
+      <p style="margin-top:10px"><a class="btn primary sm" href="${dataURL}" download="${esc(name||'file')}">⬇️ Download</a></p>`;
   }
   $("#fileModal").classList.add("show");
 }
