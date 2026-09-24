@@ -256,6 +256,7 @@
     <button class="tab-btn" data-tab="export">📄 PDF / Email</button>
     <button class="tab-btn" data-tab="cloud">☁️ Cloud</button>
     <button class="tab-btn" data-tab="backup">💾 Backup</button>
+    <button class="tab-btn" data-tab="flyer">🖼️ Flyer</button>
   </div>
 
   <!-- ADD PANEL -->
@@ -531,6 +532,56 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
     </div>
   </section>
 
+  <!-- FLYER PANEL -->
+  <section class="panel" id="panel-flyer">
+    <div class="card">
+      <h2>🖼️ Flyer maker — download rate table as JPEG</h2>
+      <p class="sub">Load a company's rates (or type your own), edit any cell, then download a clean image to send to travel agencies.</p>
+
+      <div class="grid cols-2" style="margin-bottom:14px">
+        <div>
+          <label>Load from a saved company <span class="muted" style="font-weight:400">(optional)</span></label>
+          <select id="flyerCompany"><option value="">— none / type manually —</option></select>
+        </div>
+        <div>
+          <label>Flyer title</label>
+          <input id="flyerTitle" placeholder="e.g. Grand Central Hotel — Deluxe Room Rates" />
+        </div>
+      </div>
+      <div class="grid cols-2" style="margin-bottom:6px">
+        <div>
+          <label>Subtitle line <span class="muted" style="font-weight:400">(optional)</span></label>
+          <input id="flyerSubtitle" placeholder="e.g. Currency: AED  ·  Valid Oct–Nov 2026" />
+        </div>
+        <div>
+          <label>Banner <span class="muted" style="font-weight:400">(optional, e.g. a promo note)</span></label>
+          <input id="flyerBanner" placeholder="e.g. NO DIWALI SUPPLEMENT" />
+        </div>
+      </div>
+
+      <label style="margin-top:10px">Rate table <span class="muted" style="font-weight:400">— edit any cell</span></label>
+      <div style="overflow-x:auto">
+        <table id="flyerTable"><thead><tr id="flyerHead"></tr></thead><tbody id="flyerBody"></tbody></table>
+      </div>
+      <div class="row-actions">
+        <button class="btn ghost sm" id="flyerAddCol">＋ Add column</button>
+        <button class="btn ghost sm" id="flyerAddRow">＋ Add row</button>
+      </div>
+
+      <hr style="border:none; border-top:1px solid var(--line); margin:16px 0" />
+      <label>Preview</label>
+      <div style="overflow-x:auto; text-align:center; background:#0b2545; padding:14px; border-radius:12px">
+        <canvas id="flyerCanvas" width="900" height="360" style="background:#fff; border-radius:10px; max-width:100%"></canvas>
+      </div>
+      <div class="row-actions">
+        <button class="btn primary" id="flyerRefresh">🔄 Update preview</button>
+        <button class="btn green" id="flyerDownloadJpg">⬇️ Download JPEG</button>
+        <button class="btn ghost" id="flyerDownloadPng">⬇️ Download PNG</button>
+      </div>
+      <p class="hint">On a phone, after tapping Download you can also long-press the image → “Save image”, or use Share to send it on WhatsApp/email.</p>
+    </div>
+  </section>
+
 </div>
 
 <!-- File viewer modal -->
@@ -607,6 +658,7 @@ document.querySelectorAll(".tab-btn").forEach(b=>{
     if(b.dataset.tab==="search") { renderSearch($("#searchInput").value); refreshCompanyList(); }
     if(b.dataset.tab==="cloud") refreshCloudUI();
     if(b.dataset.tab==="export") fillPdfCompanies();
+    if(b.dataset.tab==="flyer") initFlyer();
   });
 });
 
@@ -2011,6 +2063,163 @@ $("#pdfEmailBtn").addEventListener("click", async ()=>{
   window.location.href = `mailto:?subject=${subject}&body=${body}`;
   toast("PDF downloaded — attach it in the email that opened","ok");
 });
+
+/* ============================================================
+   FLYER MAKER (editable rate table → JPEG image)
+   ============================================================ */
+let flyerReady = false;
+async function initFlyer(){
+  // populate company dropdown
+  const all = await getAll("rates");
+  const names = [...new Set(all.map(r=> r.company))].sort((a,b)=> a.localeCompare(b));
+  const sel = $("#flyerCompany");
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">— none / type manually —</option>`
+    + names.map(n=> `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  if(cur) sel.value = cur;
+  if(!flyerReady){
+    // start with a default editable table
+    renderFlyerGrid(
+      ["Period","Rate (AED)","Tourism Fee","Extra Bed"],
+      [["OCT 1-15","AED 240","AED 15 TD","AED 120"],
+       ["OCT 16-31","AED 250","AED 15 TD","AED 130"],
+       ["NOVEMBER","AED 285","AED 15 TD","AED 130"]]
+    );
+    if(!$("#flyerTitle").value) $("#flyerTitle").value = "Deluxe Room Rates";
+    if(!$("#flyerSubtitle").value) $("#flyerSubtitle").value = "Currency: AED";
+    flyerReady = true;
+    drawFlyer();
+  }
+}
+
+function renderFlyerGrid(headers, rows){
+  const head = $("#flyerHead"), body = $("#flyerBody");
+  head.innerHTML = headers.map((h,c)=>`
+    <th style="min-width:110px">
+      <input class="grid-head-input fl-h" data-col="${c}" value="${esc(h)}" />
+      <div style="text-align:center"><button class="fl-delcol" data-col="${c}" style="border:none;background:none;color:var(--red);cursor:pointer;font-size:12px">✕ col</button></div>
+    </th>`).join("") + `<th></th>`;
+  body.innerHTML = rows.map(r=>{
+    const cells = headers.map((_,c)=> r[c] ?? "");
+    return `<tr>${cells.map(v=>`<td><input class="grid-cell fl-c" value="${esc(v)}" /></td>`).join("")}<td><button class="btn danger sm fl-rm">✕</button></td></tr>`;
+  }).join("");
+  body.querySelectorAll(".fl-rm").forEach(b=> b.addEventListener("click", ()=>{ b.closest("tr").remove(); drawFlyer(); }));
+  head.querySelectorAll(".fl-delcol").forEach(b=> b.addEventListener("click", ()=> flyerRemoveCol(+b.dataset.col)));
+  // live update on typing
+  body.querySelectorAll(".fl-c").forEach(i=> i.addEventListener("input", ()=> drawFlyer()));
+  head.querySelectorAll(".fl-h").forEach(i=> i.addEventListener("input", ()=> drawFlyer()));
+}
+
+function readFlyerGrid(){
+  const headers = [...$("#flyerHead").querySelectorAll(".fl-h")].map(i=> i.value.trim());
+  const rows = [...$("#flyerBody").querySelectorAll("tr")].map(tr=>
+    [...tr.querySelectorAll(".fl-c")].map(i=> i.value.trim())
+  ).filter(r=> r.some(c=> c!==""));
+  return { headers, rows };
+}
+function flyerRemoveCol(col){
+  const t = readFlyerGrid();
+  t.headers.splice(col,1); t.rows.forEach(r=> r.splice(col,1));
+  if(!t.headers.length){ t.headers=["Column 1"]; t.rows=[[""]]; }
+  renderFlyerGrid(t.headers, t.rows.length?t.rows:[t.headers.map(()=> "")]); drawFlyer();
+}
+$("#flyerAddRow").addEventListener("click", ()=>{ const t=readFlyerGrid(); t.rows.push(t.headers.map(()=> "")); renderFlyerGrid(t.headers,t.rows); drawFlyer(); });
+$("#flyerAddCol").addEventListener("click", ()=>{ const t=readFlyerGrid(); t.headers.push("New column"); t.rows.forEach(r=>r.push("")); if(!t.rows.length)t.rows=[t.headers.map(()=> "")]; renderFlyerGrid(t.headers,t.rows); drawFlyer(); });
+
+// Load a saved company's rates into the flyer table
+$("#flyerCompany").addEventListener("change", async ()=>{
+  const name = $("#flyerCompany").value;
+  if(!name) return;
+  const all = await getAll("rates");
+  const rec = all.filter(r=> r.company===name).sort((a,b)=> (b.createdAt||0)-(a.createdAt||0))[0];
+  if(!rec){ return; }
+  const g = recordToGrid(rec);
+  renderFlyerGrid(g.headers, g.rows.length?g.rows:[g.headers.map(()=> "")]);
+  $("#flyerTitle").value = (rec.roomType? rec.roomType+" — " : "") + name;
+  const sub = [rec.promo, [rec.month,rec.year].filter(Boolean).join(" "), "Currency: AED"].filter(Boolean).join("  ·  ");
+  $("#flyerSubtitle").value = sub;
+  drawFlyer();
+  toast("Loaded "+name+" — edit any cell","ok");
+});
+
+$("#flyerRefresh").addEventListener("click", drawFlyer);
+
+function drawFlyer(){
+  const cv = $("#flyerCanvas"); if(!cv) return;
+  const ctx = cv.getContext("2d");
+  const { headers, rows } = readFlyerGrid();
+  const title = $("#flyerTitle").value.trim();
+  const subtitle = $("#flyerSubtitle").value.trim();
+  const banner = $("#flyerBanner").value.trim();
+
+  const navy="#0b2545", blue="#1e3a8a", light="#f5f8fc", ink="#1e293b", gold="#f59e0b", red="#b91c1c";
+  const cols = Math.max(1, headers.length);
+  const W = 900, marginX = 30;
+  const tableW = W - marginX*2;
+  const colW = tableW / cols;
+  const headerBar = 66;
+  const bannerH = banner ? 44 : 0;
+  const tableTop = 24 + headerBar + 14 + bannerH + (banner?14:0);
+  const headH = 52, rowH = 50;
+  const totalTableH = headH + rows.length*rowH;
+  const H = tableTop + totalTableH + 30;
+  cv.width = W; cv.height = H;
+
+  ctx.fillStyle = "#fff"; ctx.fillRect(0,0,W,H);
+  ctx.textBaseline = "middle";
+
+  // title bar
+  ctx.fillStyle = navy; ctx.fillRect(marginX, 24, tableW, headerBar);
+  ctx.fillStyle = gold; ctx.fillRect(marginX, 24, 8, headerBar);
+  ctx.fillStyle = "#fff"; ctx.textAlign="left"; ctx.font = "bold 24px Segoe UI, Arial";
+  ctx.fillText(title || "Rate Sheet", marginX+24, 24 + (subtitle?28:33));
+  if(subtitle){ ctx.font = "13px Segoe UI, Arial"; ctx.fillStyle = "#bcd7ee"; ctx.fillText(subtitle, marginX+24, 24 + 50); }
+
+  // banner
+  let y = 24 + headerBar + 14;
+  if(banner){
+    ctx.fillStyle = "#fef3c7"; ctx.fillRect(marginX, y, tableW, bannerH);
+    ctx.strokeStyle = "#f59e0b"; ctx.lineWidth=1; ctx.strokeRect(marginX, y, tableW, bannerH);
+    ctx.fillStyle = red; ctx.textAlign="center"; ctx.font="bold 18px Segoe UI, Arial";
+    ctx.fillText(banner, W/2, y + bannerH/2);
+    y += bannerH + 14;
+  }
+
+  // header row
+  ctx.fillStyle = blue; ctx.fillRect(marginX, y, tableW, headH);
+  ctx.fillStyle = "#fff"; ctx.font="bold 15px Segoe UI, Arial"; ctx.textAlign="center";
+  headers.forEach((h,i)=> ctx.fillText(h, marginX + colW*i + colW/2, y + headH/2));
+
+  // rows
+  rows.forEach((r,ri)=>{
+    const ry = y + headH + ri*rowH;
+    ctx.fillStyle = ri%2 ? "#eef4fb" : light; ctx.fillRect(marginX, ry, tableW, rowH);
+    r.forEach((cell,ci)=>{
+      ctx.fillStyle = ci===0 ? navy : ink;
+      ctx.font = ci===0 ? "bold 15px Segoe UI, Arial" : "15px Segoe UI, Arial";
+      ctx.fillText(cell, marginX + colW*ci + colW/2, ry + rowH/2);
+    });
+  });
+
+  // grid lines
+  ctx.strokeStyle="#cbd5e1"; ctx.lineWidth=1;
+  for(let i=0;i<=cols;i++){ ctx.beginPath(); ctx.moveTo(marginX+colW*i, y); ctx.lineTo(marginX+colW*i, y+totalTableH); ctx.stroke(); }
+  for(let i=0;i<=rows.length;i++){ const yy=y+headH+i*rowH - (i===0?headH:0); }
+  ctx.beginPath(); ctx.moveTo(marginX, y+headH); ctx.lineTo(marginX+tableW, y+headH); ctx.stroke();
+  rows.forEach((_,ri)=>{ const yy=y+headH+(ri+1)*rowH; ctx.beginPath(); ctx.moveTo(marginX,yy); ctx.lineTo(marginX+tableW,yy); ctx.stroke(); });
+  ctx.strokeRect(marginX, y, tableW, totalTableH);
+}
+
+function flyerDownload(type, ext){
+  drawFlyer();
+  const cv = $("#flyerCanvas");
+  const url = cv.toDataURL(type, 0.95);
+  const nm = ($("#flyerTitle").value.trim()||"rates").replace(/[^a-z0-9]+/gi,"-").toLowerCase();
+  const a = document.createElement("a"); a.href=url; a.download = nm+"."+ext; a.click();
+  toast(ext.toUpperCase()+" downloaded ✓","ok");
+}
+$("#flyerDownloadJpg").addEventListener("click", ()=> flyerDownload("image/jpeg","jpg"));
+$("#flyerDownloadPng").addEventListener("click", ()=> flyerDownload("image/png","png"));
 
 /* ============================================================
    BACKUP / RESTORE
