@@ -1248,6 +1248,70 @@ function renderReferencePane(){
   }
 }
 
+/* ---------- FLYER / CARD reader ----------
+   Some rate sheets are designed as visual cards (period badge + big price +
+   side boxes), NOT tables. OCR returns the values on separate lines. This
+   reader scans the lines, finds each PERIOD label (month or date-range), and
+   pairs it with the AED rate, "+ TD" supplement, and Extra Bed that follow it.
+   Returns a {headers, rows} grid or null if it doesn't look like a flyer. */
+function parseFlyer(text){
+  const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  const monthWord = /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/i;
+  // a "period" line: a month name, or a date range like "OCT 1-15", "23-26"
+  const isPeriod = l =>
+    (monthWord.test(l) && l.length <= 24 && !/aed|dhs|supplement|extra|room|rates?/i.test(l))
+    || /^\d{1,2}\s*[-–]\s*\d{1,2}$/.test(l);
+  const aedRe = /(?:aed|dhs?)\s*([0-9][0-9,]*(?:\.[0-9]+)?)/i;
+  const tdRe  = /\+\s*(?:aed|dhs?)?\s*([0-9]+)\s*td/i;
+
+  // find indices of period lines
+  const periodIdx = [];
+  lines.forEach((l,i)=>{ if(isPeriod(l)) periodIdx.push(i); });
+  if(periodIdx.length < 1) return null;
+
+  const rows = [];
+  let hasTD=false, hasExtra=false;
+  for(let p=0;p<periodIdx.length;p++){
+    const start = periodIdx[p];
+    const end = (p+1<periodIdx.length) ? periodIdx[p+1] : lines.length;
+    const block = lines.slice(start, end);
+    const period = block[0].replace(/\s{2,}/g," ").trim();
+
+    // within this block, find the first AED (main rate), a +TD, and Extra Bed
+    let rate="", td="", extra="";
+    for(let k=0;k<block.length;k++){
+      const ln = block[k];
+      const tdM = ln.match(tdRe);
+      if(tdM && !td){ td = "AED "+tdM[1]+" TD"; hasTD=true; continue; }
+      const aedM = ln.match(aedRe);
+      if(aedM){
+        if(/extra\s*bed/i.test(block[k-1]||"") || /extra\s*bed/i.test(ln)){
+          if(!extra){ extra = "AED "+aedM[1]; hasExtra=true; }
+        } else if(!rate){
+          rate = "AED "+aedM[1];
+        } else if(!extra){
+          // a second AED with no label after the main rate → likely extra bed
+          extra = "AED "+aedM[1]; hasExtra=true;
+        }
+      }
+    }
+    if(rate || extra) rows.push({period, rate, td, extra});
+  }
+  if(rows.length === 0) return null;
+
+  // build headers based on what we found
+  const headers = ["Period", "Rate (AED)"];
+  if(hasTD) headers.push("Tourism Fee");
+  if(hasExtra) headers.push("Extra Bed");
+  const gridRows = rows.map(r=>{
+    const row = [r.period, r.rate];
+    if(hasTD) row.push(r.td||"");
+    if(hasExtra) row.push(r.extra||"");
+    return row;
+  });
+  return { headers, rows: gridRows };
+}
+
 /* Parse a pasted WhatsApp/email message into a simple 2-column grid:
    Description | Rate (AED). One row per line — keeps values like "240+15"
    and notes in brackets intact, so free-text messages aren't mangled. */
@@ -1303,7 +1367,12 @@ function openReview(text, pre){
       headers = table.headers; rows = table.rows; title = table.title;
     }
   }
-  // 3) last resort: show the raw spatial grid rows directly
+  // 3) flyer/card layout reader (period badge + price boxes, not a table)
+  if(rows.length === 0){
+    const flyer = parseFlyer(text);
+    if(flyer && flyer.rows.length){ headers = flyer.headers; rows = flyer.rows; }
+  }
+  // 4) last resort: show the raw spatial grid rows directly
   if(rows.length === 0 && lastPdfGrid && lastPdfGrid.rows.length){
     const raw = lastPdfGrid.rows;
     headers = raw[0].map((c,i)=> c.trim() || ("Column "+(i+1)));
