@@ -559,7 +559,15 @@ October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
         </div>
       </div>
 
-      <label style="margin-top:10px">Rate table <span class="muted" style="font-weight:400">— edit any cell</span></label>
+      <label style="margin-top:10px">📅 Add a period using the calendar <span class="muted" style="font-weight:400">(optional)</span></label>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px">
+        <div><label style="font-size:12px">From</label><input type="date" id="flyerFrom" style="width:auto" /></div>
+        <div><label style="font-size:12px">To</label><input type="date" id="flyerTo" style="width:auto" /></div>
+        <button class="btn ghost sm" id="flyerInsertDate">＋ Add as new row</button>
+        <span class="muted" style="font-size:12px">Adds a row with the date range in the first column (e.g. “01–15 Oct 2026”).</span>
+      </div>
+
+      <label style="margin-top:4px">Rate table <span class="muted" style="font-weight:400">— edit any cell</span></label>
       <div style="overflow-x:auto">
         <table id="flyerTable"><thead><tr id="flyerHead"></tr></thead><tbody id="flyerBody"></tbody></table>
       </div>
@@ -2110,21 +2118,51 @@ function renderFlyerGrid(headers, rows){
   head.querySelectorAll(".fl-h").forEach(i=> i.addEventListener("input", ()=> drawFlyer()));
 }
 
-function readFlyerGrid(){
+function readFlyerGrid(keepEmpty){
   const headers = [...$("#flyerHead").querySelectorAll(".fl-h")].map(i=> i.value.trim());
-  const rows = [...$("#flyerBody").querySelectorAll("tr")].map(tr=>
+  let rowsAll = [...$("#flyerBody").querySelectorAll("tr")].map(tr=>
     [...tr.querySelectorAll(".fl-c")].map(i=> i.value.trim())
-  ).filter(r=> r.some(c=> c!==""));
+  );
+  let rows = rowsAll;
+  // keepEmpty=true while editing (so a freshly added blank row stays);
+  // drop empties only when drawing/downloading the final image.
+  if(!keepEmpty) rows = rows.filter(r=> r.some(c=> c!==""));
   return { headers, rows };
 }
 function flyerRemoveCol(col){
-  const t = readFlyerGrid();
+  const t = readFlyerGrid(true);
   t.headers.splice(col,1); t.rows.forEach(r=> r.splice(col,1));
   if(!t.headers.length){ t.headers=["Column 1"]; t.rows=[[""]]; }
   renderFlyerGrid(t.headers, t.rows.length?t.rows:[t.headers.map(()=> "")]); drawFlyer();
 }
-$("#flyerAddRow").addEventListener("click", ()=>{ const t=readFlyerGrid(); t.rows.push(t.headers.map(()=> "")); renderFlyerGrid(t.headers,t.rows); drawFlyer(); });
-$("#flyerAddCol").addEventListener("click", ()=>{ const t=readFlyerGrid(); t.headers.push("New column"); t.rows.forEach(r=>r.push("")); if(!t.rows.length)t.rows=[t.headers.map(()=> "")]; renderFlyerGrid(t.headers,t.rows); drawFlyer(); });
+$("#flyerAddRow").addEventListener("click", ()=>{ const t=readFlyerGrid(true); t.rows.push(t.headers.map(()=> "")); renderFlyerGrid(t.headers,t.rows); drawFlyer(); });
+$("#flyerAddCol").addEventListener("click", ()=>{ const t=readFlyerGrid(true); t.headers.push("New column"); t.rows.forEach(r=>r.push("")); if(!t.rows.length)t.rows=[t.headers.map(()=> "")]; renderFlyerGrid(t.headers,t.rows); drawFlyer(); });
+
+// Format a date range into a readable period label
+function fmtDateRange(from, to){
+  const mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const d = s => { const p=s.split("-"); return {y:+p[0], m:+p[1], day:+p[2]}; };
+  if(from && to){
+    const a=d(from), b=d(to);
+    if(a.y===b.y && a.m===b.m) return `${String(a.day).padStart(2,"0")}–${String(b.day).padStart(2,"0")} ${mon[a.m-1]} ${a.y}`;
+    if(a.y===b.y) return `${String(a.day).padStart(2,"0")} ${mon[a.m-1]} – ${String(b.day).padStart(2,"0")} ${mon[b.m-1]} ${a.y}`;
+    return `${String(a.day).padStart(2,"0")} ${mon[a.m-1]} ${a.y} – ${String(b.day).padStart(2,"0")} ${mon[b.m-1]} ${b.y}`;
+  }
+  if(from){ const a=d(from); return `${String(a.day).padStart(2,"0")} ${mon[a.m-1]} ${a.y}`; }
+  return "";
+}
+$("#flyerInsertDate").addEventListener("click", ()=>{
+  const from = $("#flyerFrom").value, to = $("#flyerTo").value;
+  if(!from){ toast("Pick a 'From' date first","err"); return; }
+  const label = fmtDateRange(from, to);
+  const t = readFlyerGrid(true);
+  const row = t.headers.map(()=> "");
+  row[0] = label;                 // put the date range in the first column
+  t.rows.push(row);
+  renderFlyerGrid(t.headers, t.rows);
+  drawFlyer();
+  toast("Added row: "+label,"ok");
+});
 
 // Load a saved company's rates into the flyer table
 $("#flyerCompany").addEventListener("change", async ()=>{
