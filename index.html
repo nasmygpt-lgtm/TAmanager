@@ -774,8 +774,11 @@ async function handleFile(file){
   }catch(err){
     console.error(err);
     setProgress(false);
-    toast("Couldn't read the file automatically — you can still enter rates manually.","err");
-    openReview(""); // still let them fill manually
+    // Reading failed — DON'T dead-end. Keep the uploaded file shown on the
+    // left and give a ready-to-fill table so the user just types values + the
+    // company name and saves.
+    toast("Couldn't auto-read this image — the file is saved; just fill the rows next to it and Save.","err");
+    openReview("");
   }
 }
 
@@ -1530,11 +1533,14 @@ function openReview(text, pre){
     renderGrid(headers, rows);
     toast(`Found a table with ${rows.length} row(s) — please check`,"ok");
   } else {
-    renderGrid(["Column 1","Column 2","Column 3"], [["","",""]]);
-    // auto-open the diagnostic so the user can see the raw extraction
-    $("#rawText").style.display = "block";
-    $("#rawTextToggle").textContent = "▾ Hide raw text the reader extracted";
-    toast("Couldn't auto-read the table — see the extracted text below","err");
+    // Couldn't auto-read. Instead of a dead end, give a ready-to-fill starter
+    // table shaped like a typical rate flyer, with a few blank rows so the user
+    // can just look at the file on the left and type the values in.
+    renderGrid(
+      ["Period","Rate (AED)","Tourism Fee","Extra Bed"],
+      [["","","",""],["","","",""],["","","",""]]
+    );
+    toast("Couldn't auto-read it — the file is saved on the left. Just type the rows and Save.","err");
   }
 
   refreshCompanyList();
@@ -1712,9 +1718,18 @@ $("#saveBtn").addEventListener("click", async ()=>{
   if(editingId) companies = companies.length ? [companies[0]] : [];
   if(companies.length === 0){ toast("Please enter at least one company name","err"); $("#fCompany").focus(); return; }
 
-  // Read the generic grid exactly as shown
-  const table = readGrid();
-  if(table.rows.length === 0){ toast("Add at least one row to the table","err"); return; }
+  // Read the generic grid exactly as shown.
+  let table = readGrid();
+  // The ONLY hard requirement is a company name. If the table is empty but a
+  // file is attached, save anyway — the uploaded flyer IS the record, and the
+  // user can fill/edit the rows later. Never dead-end the save.
+  if(table.rows.length === 0){
+    if(!(pendingFile && pendingDataURL) && !(editingId)){
+      toast("Type at least one row, or upload a file, then Save","err"); return;
+    }
+    // keep whatever headers exist so the record still has a sensible shape
+    if(!table.headers.length) table.headers = ["Period","Rate (AED)","Tourism Fee","Extra Bed"];
+  }
 
   // resolve the file to attach (shared across all companies)
   let fileId = null;
