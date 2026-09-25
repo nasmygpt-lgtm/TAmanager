@@ -288,9 +288,11 @@ Month  BB  RO  NRF
 October 2026  AED 265 + 15 TD  AED 240 + 15 TD  5%"></textarea>
       <div class="row-actions">
         <button class="btn primary" id="pasteReadBtn">📋 Read text</button>
+        <button class="btn ghost" id="pasteFlyerBtn">🖼️ Read as flyer</button>
         <button class="btn ghost" id="pasteClearBtn">Clear</button>
       </div>
-      <p class="hint">Tip: keep each rate on its own line. Extra notes in brackets like <code>(No Diwali Supplement)</code> are kept with that line.</p>
+      <p class="hint">Tip: keep each rate on its own line. Extra notes in brackets like <code>(No Diwali Supplement)</code> are kept with that line.<br>
+      Use <strong>Read as flyer</strong> for card-style rate flyers (a period like <code>OCT 1-15</code> or <code>NOVEMBER</code> on one line, then its price, <code>+ AED 15 TD</code>, and <code>EXTRA BED</code> below).</p>
     </div>
 
     <div class="card" id="reviewCard" style="display:none">
@@ -701,6 +703,31 @@ $("#pasteReadBtn").addEventListener("click", ()=>{
   const grid = parsePastedLines(text);
   openReview(text, grid);
   toast(`Read ${grid.rows.length} line(s) — please check`,"ok");
+});
+/* ---- "Read as flyer": force the card/flyer parser on the pasted text ----
+   Use this for card-style rate flyers where each period (OCT 1-15, NOVEMBER)
+   sits on its own line above its price, +TD and EXTRA BED. If the flyer reader
+   can't find any periods, we fall back to the normal line reader so the click
+   is never a dead end. */
+$("#pasteFlyerBtn").addEventListener("click", ()=>{
+  const text = $("#pasteBox").value.trim();
+  if(!text){ toast("Paste some rate text first","err"); $("#pasteBox").focus(); return; }
+  resetAddForm();
+  lastPdfGrid = null;
+  pendingFile = null; pendingDataURL = null;
+  const m = detectMonth(text);
+  if(m) $("#fMonth").value = m;
+
+  const flyer = parseFlyer(text);
+  if(flyer && flyer.rows.length){
+    openReview(text, flyer);   // pre-built grid takes priority in openReview()
+    toast(`Read ${flyer.rows.length} flyer row(s) — please check`,"ok");
+  } else {
+    // not flyer-shaped — fall back to the simple line reader instead of failing
+    const grid = parsePastedLines(text);
+    openReview(text, grid);
+    toast("Couldn't read it as a flyer — used the plain text reader instead","err");
+  }
 });
 $("#pasteClearBtn").addEventListener("click", ()=>{ $("#pasteBox").value = ""; });
 
