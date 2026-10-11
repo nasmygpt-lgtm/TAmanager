@@ -2510,16 +2510,33 @@ $("#signupBtn").addEventListener("click", async ()=>{
   if(!sb) return;
   const email=$("#authEmail").value.trim(), password=$("#authPass").value;
   if(!email||!password){ toast("Enter email and password","err"); return; }
-  const { error } = await sb.auth.signUp({email, password});
+  if(password.length < 6){ toast("Password must be at least 6 characters","err"); return; }
+  const { data, error } = await sb.auth.signUp({email, password});
   if(error){ toast("Sign up failed: "+error.message,"err"); return; }
-  toast("Account created — check email if confirmation is required, then Log in","ok");
+  // If a session is returned immediately, confirmation is OFF → log straight in
+  if(data && data.session){
+    cloudUser = data.user;
+    toast("Account created & logged in ✓","ok");
+    await pullFromCloud(); refreshCloudUI();
+  } else {
+    toast("Account created. If login fails, turn OFF 'Confirm email' in Supabase → Authentication, then try again.","ok");
+  }
 });
 $("#loginBtn").addEventListener("click", async ()=>{
   if(!sb) return;
   const email=$("#authEmail").value.trim(), password=$("#authPass").value;
   if(!email||!password){ toast("Enter email and password","err"); return; }
   const { data, error } = await sb.auth.signInWithPassword({email, password});
-  if(error){ toast("Login failed: "+error.message,"err"); return; }
+  if(error){
+    let msg = error.message || "login failed";
+    if(/invalid login credentials/i.test(msg))
+      msg = "Wrong email/password, OR email not confirmed. Fix: Supabase → Authentication → turn OFF 'Confirm email', then click Create account again.";
+    else if(/email not confirmed/i.test(msg))
+      msg = "Email not confirmed. In Supabase → Authentication, turn OFF 'Confirm email', then log in.";
+    toast("Login failed: "+msg,"err");
+    console.error("login error:", error);
+    return;
+  }
   cloudUser = data.user;
   toast("Logged in ✓ — syncing…","ok");
   await pullFromCloud();
